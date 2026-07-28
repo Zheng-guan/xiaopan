@@ -8,6 +8,23 @@
       name="description"
       content="小盘 — 安全、轻盈且支持大文件断点续传的个人网盘。"
     />
+    <script>
+      (() => {
+        try {
+          const savedTheme = window.localStorage.getItem("xiaopan:theme");
+          const theme =
+            savedTheme === "light" || savedTheme === "dark"
+              ? savedTheme
+              : window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light";
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.style.colorScheme = theme;
+        } catch {
+          document.documentElement.dataset.theme = "light";
+        }
+      })();
+    </script>
     <title>小盘 · 你的个人云空间</title>
   </head>
   <body>

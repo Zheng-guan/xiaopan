@@ -57,6 +57,7 @@ import AdminApp from "./AdminApp";
 import PublicShareView from "./PublicShareView";
 import QuickTextCenter from "./QuickTextCenter";
 import ShareCenter from "./ShareCenter";
+import ThemeToggle from "./ThemeToggle";
 import { checkAdmin } from "./lib/admin";
 import {
   createFileRecord,
@@ -165,12 +166,12 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  if (publicShareToken) {
-    return <PublicShareView token={publicShareToken} />;
-  }
+  let content: ReactNode;
 
-  if (!ready) {
-    return (
+  if (publicShareToken) {
+    content = <PublicShareView token={publicShareToken} />;
+  } else if (!ready) {
+    content = (
       <div className="app-loading">
         <div className="brand-mark">
           <Cloud size={25} strokeWidth={2.3} />
@@ -178,9 +179,16 @@ export default function App() {
         <LoaderCircle className="spin" size={22} />
       </div>
     );
+  } else {
+    content = session ? <AuthenticatedView session={session} /> : <AuthView />;
   }
 
-  return session ? <AuthenticatedView session={session} /> : <AuthView />;
+  return (
+    <>
+      {content}
+      <ThemeToggle />
+    </>
+  );
 }
 
 function AuthenticatedView({ session }: { session: Session }) {
