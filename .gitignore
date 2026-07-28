@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.netlify/
+outputs/
+supabase/.temp/
+.env
+.env.local
+.env.*.local
+*.log
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
