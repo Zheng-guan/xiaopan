@@ -10,6 +10,16 @@ export function formatBytes(value: number, digits = 1) {
   return `${amount.toFixed(index === 0 ? 0 : digits)} ${sizeUnits[index]}`;
 }
 
+export function formatQuotaBytes(value: number, digits = 1) {
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  const index = Math.min(
+    Math.floor(Math.log(value) / Math.log(1000)),
+    sizeUnits.length - 1,
+  );
+  const amount = value / 1000 ** index;
+  return `${amount.toFixed(index === 0 ? 0 : digits)} ${sizeUnits[index]}`;
+}
+
 export function formatSpeed(value: number) {
   return value > 0 ? `${formatBytes(value)}/s` : "正在计算";
 }

@@ -16,7 +16,7 @@
 
 小盘将私有文件存储、大文件断点续传、跨设备文字快传、安全公开分享和服务端后台管理整合在一个简洁的网站中。
 
-文件由浏览器直接上传到 Supabase Storage，不经过 Netlify Function，因此大文件不会受到 Serverless 请求体、响应体或执行时间限制。
+文件通过服务端签发的分片地址，由浏览器直接上传到 Cloudflare R2。文件内容不经过 Netlify Function，因此大文件不会受到 Serverless 请求体或响应体限制。Supabase 负责用户登录、文件元数据、RLS、文字实时同步和额度事务。
 
 ## 主要功能
 
@@ -24,7 +24,7 @@
 - 每位用户独立的私有文件与文件夹空间
 - 文件夹导航、列表/网格视图、搜索、排序和容量统计
 - 拖拽上传和多文件上传
-- 基于 Supabase TUS 的 6 MiB 分片上传
+- 基于 Cloudflare R2 的分片上传，基础分片为 10 MiB 并可自动增大
 - 暂停/继续、失败重试、上传进度和实时速度
 - 短时签名 URL 下载和浏览器流式下载
 - 重命名、移动、递归删除和多选操作
@@ -67,7 +67,7 @@
 <user-id>/<random-token>/file.<ascii-extension>
 ```
 
-Supabase RLS 保护文件元数据。Netlify 在签发任何 R2 私有对象操作前都会验证 Supabase JWT 和用户路径前缀。已有的 Supabase Storage 文件仍通过兼容路径下载。
+Supabase RLS 保护文件元数据。Netlify 在签发任何 R2 私有对象操作前都会验证 Supabase JWT 和用户路径前缀。数据结构仍保留旧 Supabase Storage 文件的兼容路径，便于尚未迁移的安装使用。
 
 ## 技术栈
 
@@ -108,7 +108,6 @@ Copy-Item .env.example .env.local
 ```dotenv
 VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_YOUR_KEY
-VITE_STORAGE_QUOTA_BYTES=1099511627776
 VITE_MAX_FILE_SIZE_BYTES=5497558138880
 ```
 
@@ -147,6 +146,7 @@ npx supabase db push
 - 所有权约束、索引和辅助函数
 - Postgres RLS policies
 - Storage 读写 policies
+- 原子上传预留和服务端强制执行的账户/全站额度
 - 用于文字快传的 Realtime publication
 - 仅限服务端调用的管理员函数和权限
 
@@ -210,6 +210,9 @@ npx supabase functions deploy public-share --no-verify-jwt
 - 失败的分片会使用新的一小时临时签名地址重试。
 - R2 保存已完成分片；刷新后重新选择同一个本地文件即可继续。
 - R2 分片上传的单对象官方上限为 **5 TiB**。浏览器、网络、账户计费和前端配置可能让实际可用上限更低。
+- 小盘强制使用 **10 GB（十进制）共享池**。每个普通账户最多 **200 MB**；管理员额度为剩余未分配空间：`10 GB − 200 MB × 普通账户数`。
+- 当前单文件上限取 `VITE_MAX_FILE_SIZE_BYTES` 与账户剩余空间中的较小值，并直接显示在上传控件旁。
+- 服务端会在签发分片地址前原子预留额度，并在写入文件记录前核验 R2 对象的实际大小。
 - 未完成的分片上传会由 R2 在七天后自动终止。
 
 官方资料：
@@ -233,7 +236,6 @@ npx supabase functions deploy public-share --no-verify-jwt
 ```text
 VITE_SUPABASE_URL
 VITE_SUPABASE_PUBLISHABLE_KEY
-VITE_STORAGE_QUOTA_BYTES
 VITE_MAX_FILE_SIZE_BYTES
 VITE_ADMIN_EMAIL
 ```
@@ -243,7 +245,6 @@ VITE_ADMIN_EMAIL
 ```text
 SUPABASE_URL
 SUPABASE_PUBLISHABLE_KEY
-SUPABASE_SECRET_KEY
 R2_ACCOUNT_ID
 R2_BUCKET_NAME
 R2_ACCESS_KEY_ID
@@ -266,6 +267,7 @@ npx netlify deploy --prod
 ## 安全说明
 
 - 所有公开 schema 中的用户数据表都开启了 RLS。
+- Netlify 文件操作使用调用者的 Supabase JWT 和最小权限的 security-definer RPC；Netlify 不需要保存 Supabase service-role key。
 - 登录用户策略始终包含所有权判断。
 - 匿名角色不能直接读取私有文件、文字或分享记录。
 - Storage bucket 保持 Private。

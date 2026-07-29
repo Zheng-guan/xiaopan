@@ -10,6 +10,7 @@ const corsHeaders = {
 type AdminAction =
   | { action: "status" }
   | { action: "overview" }
+  | { action: "prepare-delete-user"; userId: string }
   | { action: "delete-user"; userId: string };
 
 type UsageRow = {
@@ -123,18 +124,38 @@ Deno.serve(async (req: Request) => {
     }
 
     if (body.action === "overview") {
-      const [users, usageResult] = await Promise.all([
+      const [users, usageResult, administratorsResult] = await Promise.all([
         listAllUsers(admin),
         admin.rpc("admin_drive_usage"),
+        admin.from("admin_users").select("email"),
       ]);
       if (usageResult.error) throw usageResult.error;
+      if (administratorsResult.error) throw administratorsResult.error;
 
       const usageByUser = new Map(
         ((usageResult.data ?? []) as UsageRow[]).map((row) => [row.user_id, row]),
       );
+      const administratorEmails = new Set(
+        (administratorsResult.data ?? []).map((row) => row.email),
+      );
+      const personalUserCount = users.filter(
+        (user) =>
+          !user.email ||
+          !administratorEmails.has(user.email.trim().toLowerCase()),
+      ).length;
+      const totalStorageBytes = 10_000_000_000;
+      const personalStorageBytes = 200_000_000;
+      const administratorStorageBytes = Math.max(
+        0,
+        totalStorageBytes - personalUserCount * personalStorageBytes,
+      );
       const rows = users
         .map((user) => {
           const usage = usageByUser.get(user.id);
+          const isAdmin = Boolean(
+            user.email &&
+              administratorEmails.has(user.email.trim().toLowerCase()),
+          );
           return {
             id: user.id,
             email: user.email ?? "未设置邮箱",
@@ -143,6 +164,10 @@ Deno.serve(async (req: Request) => {
             usedBytes: Number(usage?.used_bytes ?? 0),
             fileCount: Number(usage?.file_count ?? 0),
             folderCount: Number(usage?.folder_count ?? 0),
+            quotaBytes: isAdmin
+              ? administratorStorageBytes
+              : personalStorageBytes,
+            isAdmin,
           };
         })
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -154,8 +179,46 @@ Deno.serve(async (req: Request) => {
           files: rows.reduce((sum, row) => sum + row.fileCount, 0),
           folders: rows.reduce((sum, row) => sum + row.folderCount, 0),
           usedBytes: rows.reduce((sum, row) => sum + row.usedBytes, 0),
+          storageBytes: totalStorageBytes,
+          personalUserCount,
         },
         users: rows,
+      });
+    }
+
+    if (body.action === "prepare-delete-user") {
+      if (!body.userId) return json({ error: "缺少用户 ID" }, 400);
+      if (body.userId === currentAdmin.id) {
+        return json({ error: "不能删除当前登录的管理员账户" }, 400);
+      }
+
+      const { data: targetData, error: targetError } =
+        await admin.auth.admin.getUserById(body.userId);
+      if (targetError || !targetData.user) return json({ error: "用户不存在" }, 404);
+
+      const normalizedTargetEmail = targetData.user.email?.trim().toLowerCase();
+      if (normalizedTargetEmail) {
+        const { data: protectedAdmin, error: protectedAdminError } = await admin
+          .from("admin_users")
+          .select("id")
+          .eq("email", normalizedTargetEmail)
+          .maybeSingle();
+        if (protectedAdminError) throw protectedAdminError;
+        if (protectedAdmin) return json({ error: "不能删除管理员账户" }, 400);
+      }
+
+      const { data: files, error: filesError } = await admin
+        .from("drive_items")
+        .select("storage_path")
+        .eq("user_id", body.userId)
+        .eq("kind", "file")
+        .eq("storage_provider", "r2")
+        .not("storage_path", "is", null);
+      if (filesError) throw filesError;
+
+      return json({
+        ready: true,
+        r2Paths: (files ?? []).map((file) => file.storage_path as string),
       });
     }
 

@@ -23,7 +23,7 @@ This file is the operating guide for anyone changing the repository. Preserve th
 
 ## Non-negotiable security rules
 
-1. Never expose `SUPABASE_SECRET_KEY`, a service-role key, Netlify tokens, or user credentials in browser code, commits, README examples, screenshots, or logs.
+1. Never expose a Supabase secret/service-role key, R2 credentials, Netlify tokens, or user credentials in browser code, commits, README examples, screenshots, or logs.
 2. Browser code may use only the Supabase URL and publishable key (`VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`).
 3. Treat Postgres RLS and server-side R2 signing as the authorization boundary. Client-side checks are only UX conveniences.
 4. Keep R2 objects under the authenticated owner's UUID prefix. Never accept an arbitrary key without verifying this prefix or its database ownership.
@@ -64,7 +64,6 @@ npm run build
 | --- | --- |
 | `VITE_SUPABASE_URL` | `SUPABASE_URL` |
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | `SUPABASE_PUBLISHABLE_KEY` |
-| `VITE_STORAGE_QUOTA_BYTES` | `SUPABASE_SECRET_KEY` |
 | `VITE_MAX_FILE_SIZE_BYTES` | `R2_ACCOUNT_ID` |
 | | `R2_BUCKET_NAME` |
 | | `R2_ACCESS_KEY_ID` |

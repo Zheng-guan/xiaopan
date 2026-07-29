@@ -2,7 +2,7 @@ import type { Config, Context } from "@netlify/functions";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { json, readJson } from "./_shared/http";
-import { adminSupabase } from "./_shared/supabase";
+import { publicSupabase, supabaseEnvironment } from "./_shared/supabase";
 import { downloadDisposition, r2Client } from "./_shared/r2";
 
 export default async (request: Request, _context: Context) => {
@@ -14,29 +14,18 @@ export default async (request: Request, _context: Context) => {
     return json({ error: "分享链接无效" }, 400);
   }
 
-  const admin = adminSupabase();
-  if (!admin) return json({ error: "Server download signing is not configured" }, 503);
-  const { data: share, error: shareError } = await admin
-    .from("shares")
-    .select("file_id, expires_at")
-    .eq("public_id", body.token)
-    .eq("share_type", "file")
-    .maybeSingle();
-  if (shareError) return json({ error: "读取分享失败" }, 500);
-  if (!share) return json({ error: "分享不存在或已取消" }, 404);
-  if (share.expires_at && new Date(share.expires_at).getTime() <= Date.now()) {
-    return json({ error: "该分享已过期" }, 410);
+  const database = publicSupabase();
+  const environment = supabaseEnvironment();
+  if (!database || !environment) {
+    return json({ error: "Server download signing is not configured" }, 503);
   }
-
-  const { data: item, error: itemError } = await admin
-    .from("drive_items")
-    .select("name, storage_path, storage_provider")
-    .eq("id", share.file_id)
-    .eq("kind", "file")
-    .maybeSingle();
-  if (itemError || !item?.storage_path) {
-    return json({ error: "共享文件已不存在" }, 404);
-  }
+  const { data, error: itemError } = await database.rpc(
+    "resolve_public_file_share",
+    { p_public_id: body.token },
+  );
+  if (itemError) return json({ error: "读取分享失败" }, 500);
+  const item = Array.isArray(data) ? data[0] : data;
+  if (!item?.storage_path) return json({ error: "分享不存在、已取消或已过期" }, 404);
 
   if (item.storage_provider === "r2") {
     const r2 = r2Client();
@@ -46,18 +35,32 @@ export default async (request: Request, _context: Context) => {
       new GetObjectCommand({
         Bucket: r2.environment.bucket,
         Key: item.storage_path,
-        ResponseContentDisposition: downloadDisposition(item.name),
+        ResponseContentDisposition: downloadDisposition(item.file_name),
       }),
       { expiresIn: 60 },
     );
     return json({ url });
   }
 
-  const { data, error } = await admin.storage
-    .from("drive")
-    .createSignedUrl(item.storage_path, 60, { download: item.name });
-  if (error) return json({ error: "生成下载链接失败" }, 500);
-  return json({ url: data.signedUrl });
+  const legacyResponse = await fetch(
+    `${environment.url}/functions/v1/public-share`,
+    {
+      method: "POST",
+      headers: {
+        apikey: environment.publishableKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ token: body.token, action: "download" }),
+    },
+  );
+  const legacy = (await legacyResponse.json().catch(() => ({}))) as {
+    url?: string;
+    error?: string;
+  };
+  if (!legacyResponse.ok || !legacy.url) {
+    return json({ error: legacy.error || "生成下载链接失败" }, legacyResponse.status);
+  }
+  return json({ url: legacy.url });
 };
 
 export const config: Config = {

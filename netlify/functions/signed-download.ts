@@ -2,7 +2,7 @@ import type { Config, Context } from "@netlify/functions";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { bearerToken, json, readJson } from "./_shared/http";
-import { authenticatedSupabase, adminSupabase } from "./_shared/supabase";
+import { authenticatedSupabase } from "./_shared/supabase";
 import { downloadDisposition, r2Client } from "./_shared/r2";
 
 export default async (request: Request, _context: Context) => {
@@ -39,9 +39,7 @@ export default async (request: Request, _context: Context) => {
     return json({ url, expiresIn: 60 });
   }
 
-  const admin = adminSupabase();
-  if (!admin) return json({ error: "Server download signing is not configured" }, 503);
-  const { data, error } = await admin.storage
+  const { data, error } = await authentication.client.storage
     .from("drive")
     .createSignedUrl(item.storage_path, 60, { download: item.name });
   if (error) return json({ error: "Unable to sign download" }, 500);

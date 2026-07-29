@@ -4,6 +4,7 @@ import {
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
+  HeadObjectCommand,
   ListPartsCommand,
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
@@ -27,7 +28,9 @@ type MultipartAction =
 interface MultipartBody {
   action?: MultipartAction;
   fileName?: string;
+  fileSize?: number;
   contentType?: string;
+  parentId?: number | null;
   key?: string;
   uploadId?: string;
   partNumber?: number;
@@ -43,6 +46,7 @@ export default async (request: Request, _context: Context) => {
 
   const r2 = r2Client();
   if (!r2) return json({ error: "R2 server configuration is incomplete" }, 503);
+  const database = authentication.client;
 
   const body = await readJson<MultipartBody>(request);
   if (!body?.action) return json({ error: "A valid action is required" }, 400);
@@ -53,20 +57,51 @@ export default async (request: Request, _context: Context) => {
       if (!fileName || fileName.length > 255) {
         return json({ error: "A valid file name is required" }, 400);
       }
+      if (
+        !Number.isSafeInteger(body.fileSize) ||
+        Number(body.fileSize) < 0 ||
+        Number(body.fileSize) > 5 * 1024 ** 4
+      ) {
+        return json({ error: "A valid file size is required" }, 400);
+      }
       const key = `${authentication.user.id}/${crypto.randomUUID()}/file${asciiExtension(fileName)}`;
-      const result = await r2.client.send(
-        new CreateMultipartUploadCommand({
-          Bucket: r2.environment.bucket,
-          Key: key,
-          ContentType: body.contentType || "application/octet-stream",
-          Metadata: {
-            owner: authentication.user.id,
-            "original-name": encodeURIComponent(fileName).slice(0, 1024),
-          },
-        }),
+      const { error: reservationError } = await database.rpc(
+        "reserve_drive_upload",
+        {
+          p_user_id: authentication.user.id,
+          p_storage_path: key,
+          p_size: body.fileSize,
+        },
       );
-      if (!result.UploadId) throw new Error("R2 did not return an upload ID");
-      return json({ key, uploadId: result.UploadId });
+      if (reservationError) {
+        if (reservationError.message.includes("Storage quota exceeded")) {
+          return json({ error: "存储空间不足，请先删除文件再上传" }, 413);
+        }
+        console.error("Unable to reserve upload quota", reservationError);
+        return json({ error: "暂时无法预留上传空间" }, 500);
+      }
+
+      try {
+        const result = await r2.client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: r2.environment.bucket,
+            Key: key,
+            ContentType: body.contentType || "application/octet-stream",
+            Metadata: {
+              owner: authentication.user.id,
+              "original-name": encodeURIComponent(fileName).slice(0, 1024),
+            },
+          }),
+        );
+        if (!result.UploadId) throw new Error("R2 did not return an upload ID");
+        return json({ key, uploadId: result.UploadId });
+      } catch (error) {
+        await database.rpc("release_drive_upload", {
+          p_user_id: authentication.user.id,
+          p_storage_path: key,
+        });
+        throw error;
+      }
     }
 
     if (!body.key || !isOwnedR2Key(body.key, authentication.user.id)) {
@@ -80,6 +115,10 @@ export default async (request: Request, _context: Context) => {
           Key: body.key,
         }),
       );
+      await database.rpc("release_drive_upload", {
+        p_user_id: authentication.user.id,
+        p_storage_path: body.key,
+      });
       return json({ ok: true });
     }
 
@@ -140,6 +179,20 @@ export default async (request: Request, _context: Context) => {
       ) {
         return json({ error: "A complete ordered parts list is required" }, 400);
       }
+      const fileName = body.fileName?.trim() ?? "";
+      if (
+        !fileName ||
+        fileName.length > 255 ||
+        !Number.isSafeInteger(body.fileSize) ||
+        Number(body.fileSize) < 0 ||
+        !(
+          body.parentId === null ||
+          body.parentId === undefined ||
+          Number.isSafeInteger(body.parentId)
+        )
+      ) {
+        return json({ error: "File metadata is invalid" }, 400);
+      }
       await r2.client.send(
         new CompleteMultipartUploadCommand({
           Bucket: r2.environment.bucket,
@@ -148,7 +201,60 @@ export default async (request: Request, _context: Context) => {
           MultipartUpload: { Parts: body.parts },
         }),
       );
-      return json({ key: body.key });
+      const completedObject = await r2.client.send(
+        new HeadObjectCommand({
+          Bucket: r2.environment.bucket,
+          Key: body.key,
+        }),
+      );
+      if (Number(completedObject.ContentLength) !== Number(body.fileSize)) {
+        console.error("Completed R2 object size does not match its reservation", {
+          key: body.key,
+          expected: body.fileSize,
+          actual: completedObject.ContentLength,
+        });
+        await Promise.allSettled([
+          r2.client.send(
+            new DeleteObjectCommand({
+              Bucket: r2.environment.bucket,
+              Key: body.key,
+            }),
+          ),
+          database.rpc("release_drive_upload", {
+            p_user_id: authentication.user.id,
+            p_storage_path: body.key,
+          }),
+        ]);
+        return json({ error: "上传文件大小校验失败，已撤销本次上传" }, 409);
+      }
+      const { data: itemId, error: finalizeError } = await database.rpc(
+        "finalize_drive_upload",
+        {
+          p_user_id: authentication.user.id,
+          p_storage_path: body.key,
+          p_parent_id: body.parentId ?? null,
+          p_name: fileName,
+          p_size: body.fileSize,
+          p_mime_type: body.contentType || "application/octet-stream",
+        },
+      );
+      if (finalizeError) {
+        console.error("Unable to finalize upload metadata", finalizeError);
+        await Promise.allSettled([
+          r2.client.send(
+            new DeleteObjectCommand({
+              Bucket: r2.environment.bucket,
+              Key: body.key,
+            }),
+          ),
+          database.rpc("release_drive_upload", {
+            p_user_id: authentication.user.id,
+            p_storage_path: body.key,
+          }),
+        ]);
+        return json({ error: "无法保存文件记录，已撤销本次上传" }, 409);
+      }
+      return json({ key: body.key, itemId });
     }
 
     if (body.action === "abort") {
@@ -159,6 +265,10 @@ export default async (request: Request, _context: Context) => {
           UploadId: body.uploadId,
         }),
       );
+      await database.rpc("release_drive_upload", {
+        p_user_id: authentication.user.id,
+        p_storage_path: body.key,
+      });
       return json({ ok: true });
     }
 

@@ -28,10 +28,6 @@ export const projectRef = (() => {
   }
 })();
 
-export const storageQuotaBytes = Number(
-  import.meta.env.VITE_STORAGE_QUOTA_BYTES || 5 * 1024 ** 3,
-);
-
 export const maxFileSizeBytes = Number(
   import.meta.env.VITE_MAX_FILE_SIZE_BYTES || 5 * 1024 ** 4,
 );

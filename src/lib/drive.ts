@@ -2,6 +2,7 @@ import { supabase } from "./supabase";
 import type {
   CategoryFilter,
   DriveItem,
+  DriveQuota,
   DriveUsage,
   SortDirection,
   SortKey,
@@ -92,6 +93,20 @@ export async function getDriveUsage(): Promise<DriveUsage> {
   };
 }
 
+export async function getDriveQuota(): Promise<DriveQuota> {
+  const { data, error } = await supabase.rpc("drive_quota");
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return {
+    quota_bytes: Number(row?.quota_bytes ?? 0),
+    used_bytes: Number(row?.used_bytes ?? 0),
+    reserved_bytes: Number(row?.reserved_bytes ?? 0),
+    remaining_bytes: Number(row?.remaining_bytes ?? 0),
+    is_admin: Boolean(row?.is_admin),
+    personal_user_count: Number(row?.personal_user_count ?? 0),
+  };
+}
+
 export async function createFolder(
   userId: string,
   parentId: number | null,
@@ -105,32 +120,6 @@ export async function createFolder(
       kind: "folder",
       name: safeName(name),
       size: 0,
-    })
-    .select()
-    .single();
-  if (error) throw error;
-  return data as DriveItem;
-}
-
-export async function createFileRecord(input: {
-  userId: string;
-  parentId: number | null;
-  name: string;
-  size: number;
-  mimeType: string;
-  storagePath: string;
-}) {
-  const { data, error } = await supabase
-    .from("drive_items")
-    .insert({
-      user_id: input.userId,
-      parent_id: input.parentId,
-      kind: "file",
-      name: safeName(input.name),
-      size: input.size,
-      mime_type: input.mimeType || "application/octet-stream",
-      storage_path: input.storagePath,
-      storage_provider: "r2",
     })
     .select()
     .single();
@@ -261,8 +250,4 @@ export async function signedDownloadUrl(item: DriveItem, accessToken: string) {
     .createSignedUrl(item.storage_path, 60, { download: item.name });
   if (error) throw error;
   return data.signedUrl;
-}
-
-export async function removeUploadedObject(storagePath: string) {
-  await deleteR2Object(storagePath);
 }

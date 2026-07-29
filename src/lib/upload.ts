@@ -146,6 +146,7 @@ export async function createResumableUpload(
     const created = await multipartRequest({
       action: "create",
       fileName: options.displayName,
+      fileSize: options.file.size,
       contentType: options.file.type || "application/octet-stream",
     });
     if (!created.key || !created.uploadId) {
@@ -228,6 +229,10 @@ export async function createResumableUpload(
         key: uploadSession.key,
         uploadId: uploadSession.uploadId,
         parts: parts.map(({ ETag, PartNumber }) => ({ ETag, PartNumber })),
+        fileName: options.displayName,
+        fileSize: options.file.size,
+        contentType: options.file.type || "application/octet-stream",
+        parentId: options.parentId,
       });
       localStorage.removeItem(key);
       options.onProgress(options.file.size, options.file.size);

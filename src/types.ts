@@ -20,6 +20,15 @@ export interface DriveUsage {
   folder_count: number;
 }
 
+export interface DriveQuota {
+  quota_bytes: number;
+  used_bytes: number;
+  reserved_bytes: number;
+  remaining_bytes: number;
+  is_admin: boolean;
+  personal_user_count: number;
+}
+
 export type SortKey = "name" | "updated_at" | "size";
 export type SortDirection = "asc" | "desc";
 export type ViewMode = "list" | "grid";
@@ -50,6 +59,8 @@ export interface AdminUserSummary {
   createdAt: string;
   lastSignInAt: string | null;
   usedBytes: number;
+  quotaBytes: number;
+  isAdmin: boolean;
   fileCount: number;
   folderCount: number;
 }
@@ -61,6 +72,8 @@ export interface AdminOverview {
     files: number;
     folders: number;
     usedBytes: number;
+    storageBytes: number;
+    personalUserCount: number;
   };
   users: AdminUserSummary[];
 }

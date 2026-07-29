@@ -60,23 +60,27 @@ import ShareCenter from "./ShareCenter";
 import ThemeToggle from "./ThemeToggle";
 import { checkAdmin } from "./lib/admin";
 import {
-  createFileRecord,
   createFolder,
   deleteDriveItems,
+  getDriveQuota,
   getDriveUsage,
   listAllFolders,
   listDriveItems,
   moveDriveItems,
-  removeUploadedObject,
   renameDriveItem,
   signedDownloadUrl,
   sortDriveItems,
 } from "./lib/drive";
-import { formatBytes, formatDate, formatSpeed, initials } from "./lib/format";
+import {
+  formatBytes,
+  formatDate,
+  formatQuotaBytes,
+  formatSpeed,
+  initials,
+} from "./lib/format";
 import {
   isSupabaseConfigured,
   maxFileSizeBytes,
-  storageQuotaBytes,
   supabase,
 } from "./lib/supabase";
 import {
@@ -86,6 +90,7 @@ import {
 import type {
   CategoryFilter,
   DriveItem,
+  DriveQuota,
   DriveUsage,
   SortDirection,
   SortKey,
@@ -534,6 +539,7 @@ function DriveApp({
   const userId = session.user.id;
   const [items, setItems] = useState<DriveItem[]>([]);
   const [usage, setUsage] = useState<DriveUsage>(emptyUsage);
+  const [quota, setQuota] = useState<DriveQuota | null>(null);
   const [path, setPath] = useState<DriveItem[]>([]);
   const [category, setCategory] = useState<CategoryFilter>("all");
   const [search, setSearch] = useState("");
@@ -581,7 +587,7 @@ function DriveApp({
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextItems, nextUsage] = await Promise.all([
+      const [nextItems, nextUsage, nextQuota] = await Promise.all([
         listDriveItems({
           userId,
           parentId: currentFolder?.id ?? null,
@@ -589,9 +595,11 @@ function DriveApp({
           category,
         }),
         getDriveUsage(),
+        getDriveQuota(),
       ]);
       setItems(nextItems);
       setUsage(nextUsage);
+      setQuota(nextQuota);
       setSelected(new Set());
     } catch (loadError) {
       setToast(messageFrom(loadError));
@@ -647,9 +655,23 @@ function DriveApp({
   async function startFiles(fileList: FileList | File[]) {
     const incoming = Array.from(fileList);
     if (!incoming.length) return;
-    const tooLarge = incoming.find((file) => file.size > maxFileSizeBytes);
+    if (!quota) {
+      setToast("正在读取可用存储空间，请稍后再试");
+      return;
+    }
+    const uploadLimit = Math.min(maxFileSizeBytes, quota.remaining_bytes);
+    const tooLarge = incoming.find((file) => file.size > uploadLimit);
     if (tooLarge) {
-      setToast(`${tooLarge.name} 超过当前配置的单文件上限`);
+      setToast(
+        `${tooLarge.name} 超过当前单文件上限 ${formatQuotaBytes(uploadLimit)}`,
+      );
+      return;
+    }
+    const totalSize = incoming.reduce((sum, file) => sum + file.size, 0);
+    if (totalSize > quota.remaining_bytes) {
+      setToast(
+        `所选文件共 ${formatQuotaBytes(totalSize)}，当前仅剩 ${formatQuotaBytes(quota.remaining_bytes)}`,
+      );
       return;
     }
 
@@ -711,47 +733,22 @@ function DriveApp({
             ),
           );
         },
-        onSuccess: (storagePath) => {
-          void (async () => {
-            try {
-              await createFileRecord({
-                userId,
-                parentId: currentFolder?.id ?? null,
-                name: task.displayName,
-                size: task.file.size,
-                mimeType: task.file.type,
-                storagePath,
-              });
-              setTasks((current) =>
-                current.map((item) =>
-                  item.id === task.id
-                    ? {
-                        ...item,
-                        status: "complete",
-                        uploaded: item.total,
-                        speed: 0,
-                      }
-                    : item,
-                ),
-              );
-              uploads.current.delete(task.id);
-              speedSamples.current.delete(task.id);
-              await refreshRef.current();
-            } catch (recordError) {
-              await removeUploadedObject(storagePath);
-              setTasks((current) =>
-                current.map((item) =>
-                  item.id === task.id
-                    ? {
-                        ...item,
-                        status: "error",
-                        error: messageFrom(recordError),
-                      }
-                    : item,
-                ),
-              );
-            }
-          })();
+        onSuccess: () => {
+          setTasks((current) =>
+            current.map((item) =>
+              item.id === task.id
+                ? {
+                    ...item,
+                    status: "complete",
+                    uploaded: item.total,
+                    speed: 0,
+                  }
+                : item,
+            ),
+          );
+          uploads.current.delete(task.id);
+          speedSamples.current.delete(task.id);
+          void refreshRef.current();
         },
         onError: (uploadError) => {
           setTasks((current) =>
@@ -1136,9 +1133,15 @@ function DriveApp({
     { id: "document", label: "文档", icon: <FileText size={18} /> },
   ];
 
+  const accountQuotaBytes = quota?.quota_bytes ?? 0;
+  const remainingBytes = quota?.remaining_bytes ?? 0;
+  const uploadLimitBytes = Math.max(
+    0,
+    Math.min(maxFileSizeBytes, remainingBytes),
+  );
   const usagePercent = Math.min(
     100,
-    storageQuotaBytes > 0 ? (usage.used_bytes / storageQuotaBytes) * 100 : 0,
+    accountQuotaBytes > 0 ? (usage.used_bytes / accountQuotaBytes) * 100 : 0,
   );
 
   return (
@@ -1165,7 +1168,11 @@ function DriveApp({
           </span>
           <span>小盘</span>
         </div>
-        <button className="upload-button" onClick={() => fileInput.current?.click()}>
+        <button
+          className="upload-button"
+          title={`单个文件上限 ${formatQuotaBytes(uploadLimitBytes)}`}
+          onClick={() => fileInput.current?.click()}
+        >
           <Plus size={19} />
           上传文件
         </button>
@@ -1213,8 +1220,10 @@ function DriveApp({
             <span style={{ width: `${usagePercent}%` }} />
           </div>
           <p>
-            已用 {formatBytes(usage.used_bytes)} / {formatBytes(storageQuotaBytes)}
+            已用 {formatBytes(usage.used_bytes)} /{" "}
+            {formatQuotaBytes(accountQuotaBytes)}
           </p>
+          <p>单个文件上限：{formatQuotaBytes(uploadLimitBytes)}</p>
         </div>
         <div className="user-chip">
           <span className="avatar">{initials(session.user.email)}</span>
@@ -1355,12 +1364,24 @@ function DriveApp({
                 className="primary-button workspace-upload-action"
                 onClick={() => fileInput.current?.click()}
                 aria-label="上传文件"
-                title="上传文件"
+                title={`上传文件，单个文件上限 ${formatQuotaBytes(uploadLimitBytes)}`}
               >
                 <UploadCloud size={17} />
                 上传
               </button>
             </div>
+          </div>
+
+          <div className="upload-limit-banner" role="status">
+            <CircleAlert size={16} />
+            <span>
+              当前单个文件上传上限{" "}
+              <strong>{formatQuotaBytes(uploadLimitBytes)}</strong>
+              ，账号剩余空间 {formatQuotaBytes(remainingBytes)}
+              {quota?.reserved_bytes
+                ? `（上传任务已预留 ${formatQuotaBytes(quota.reserved_bytes)}）`
+                : ""}
+            </span>
           </div>
 
           <div className="toolbar">
@@ -1387,7 +1408,7 @@ function DriveApp({
                 <>
                   <span className="toolbar-hint desktop-drag-hint">
                     <UploadCloud size={16} />
-                    可将文件拖到此处上传
+                    可将文件拖到此处上传 · 上限 {formatQuotaBytes(uploadLimitBytes)}
                   </span>
                   <span className="toolbar-hint mobile-drag-hint">
                     <Move size={16} />

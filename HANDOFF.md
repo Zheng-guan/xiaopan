@@ -1,6 +1,6 @@
 # Xiaopan Handoff
 
-Last updated: 2026-07-29 (Asia/Shanghai)
+Last updated: 2026-07-30 (Asia/Shanghai)
 
 ## Current release
 
@@ -10,14 +10,14 @@ Last updated: 2026-07-29 (Asia/Shanghai)
 | Production site | `https://xiaopan-drive.netlify.app` |
 | Netlify site | `xiaopan-drive` (`5fe119cb-b071-4efd-9414-48ca9de48890`) |
 | Source branch | `main` |
-| Current release scope | Cloudflare R2 multipart storage is live |
-| Deployment method | Netlify production deploy `6a6a202f0418d14a52dc5942` |
+| Current release scope | R2 migration, server quotas, and upload-limit UI |
+| Deployment method | Linked Netlify CLI production deployment |
 
-The production site routes every new file through Cloudflare R2 while retaining
-read/delete compatibility for existing Supabase Storage files. Supabase migration
-`add_r2_storage_provider` is applied in production. The frontend production build
-and all four Netlify Functions passed on 2026-07-29. The `xiaopan` bucket CORS
-allows the production origin and local Vite development and exposes `ETag`.
+All production file objects are now in Cloudflare R2. The two legacy Supabase
+Storage objects (6,572,462 bytes total) were copied, verified with R2 `HEAD`,
+switched to provider `r2`, and removed from Supabase Storage. The one-time
+migration endpoint was removed after completion. The `xiaopan` bucket CORS allows
+the production origin and local Vite development and exposes `ETag`.
 
 ## Delivered capabilities
 
@@ -29,6 +29,8 @@ allows the production origin and local Vite development and exposes `ETag`.
 - Server-protected administrator dashboard backed by the `admin_users` allowlist.
 - Responsive light/dark theme. The first visit follows system preference; later choices are stored as `xiaopan:theme`.
 - R2 private/public downloads, deletion, and administrator cleanup through protected Netlify Functions.
+- A 10 GB decimal global pool, 200 MB per non-admin account, and a dynamic administrator allocation of `10 GB − 200 MB × non-admin account count`.
+- Atomic upload reservations, actual R2 object-size verification, and visible effective single-file limits.
 
 ## Required configuration
 
@@ -38,7 +40,6 @@ Do not place values in this document. Set browser variables in the Vite/Netlify 
 | --- | --- |
 | `VITE_SUPABASE_URL` | `SUPABASE_URL` |
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | `SUPABASE_PUBLISHABLE_KEY` |
-| `VITE_STORAGE_QUOTA_BYTES` | `SUPABASE_SECRET_KEY` |
 | `VITE_MAX_FILE_SIZE_BYTES` | |
 
 Use `.env.example` as the variable-name reference. `.env.local` is local-only and ignored by Git.
@@ -64,6 +65,9 @@ Apply migrations in filename order. The repository currently includes:
 6. `20260728050842_add_share_foreign_key_index.sql`
 7. `20260728075355_add_quick_text_transfer.sql`
 8. `20260729170000_add_r2_storage_provider.sql`
+9. `20260729235800_enforce_drive_quotas.sql`
+10. `20260730170000_allow_authenticated_quota_rpcs.sql`
+11. `20260730173000_resolve_public_r2_share.sql`
 
 Supabase Edge Functions to deploy when changed:
 
@@ -100,7 +104,8 @@ After deployment, verify:
 - Rotate both Cloudflare tokens because their values were pasted into a chat, then update the two secret Netlify variables.
 - Smoke-test an 80 MB `.exe` upload, pause/resume, private download, public-share download, and deletion with a real signed-in account.
 - `npm ci` reported 16 dependency advisories (2 low, 14 high) on 2026-07-28. They did not block the production build. Review `npm audit` and upgrade deliberately in a separate change; do not apply `npm audit fix --force` without testing.
-- The client quota and per-file limit are display/preflight checks; R2 account billing and its 5 TiB multipart object limit are authoritative.
+- Quotas are enforced server-side with atomic reservations. The client display is only an early convenience check.
+- Supabase currently reports leaked-password protection as disabled; enable it in Auth settings if the project plan supports it.
 - Keep the live Supabase Auth redirect URLs aligned with the Netlify production URL and any preview domains used for testing.
 - Smoke-test mobile long-press drag and desktop drag-to-move with real signed-in accounts after every related UI change.
 

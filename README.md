@@ -16,7 +16,7 @@
 
 Xiaopan combines private file storage, resumable large-file uploads, cross-device text transfer, secure public sharing, and server-protected administration in one clean web interface.
 
-Files are uploaded directly from the browser to Supabase Storage. They do not pass through a Netlify Function, so large uploads are not constrained by serverless request-body, response-body, or execution-time limits.
+Files are uploaded directly from the browser to Cloudflare R2 with server-signed multipart URLs. File bytes do not pass through a Netlify Function, so large uploads are not constrained by serverless request-body or response-body limits. Supabase provides authentication, metadata, row-level security, realtime text transfer, and quota transactions.
 
 ## Features
 
@@ -24,7 +24,7 @@ Files are uploaded directly from the browser to Supabase Storage. They do not pa
 - Private files and folders for every user
 - Folder navigation, list/grid views, search, sorting, and storage statistics
 - Drag-and-drop and multi-file uploads
-- Supabase TUS uploads with 6 MiB chunks
+- Cloudflare R2 multipart uploads with adaptive 10 MiB-or-larger parts
 - Pause/resume, retry, upload progress, and live transfer speed
 - Short-lived signed download URLs and browser-streamed downloads
 - Rename, move, recursive delete, and multi-select operations
@@ -67,7 +67,7 @@ New R2 object keys always follow:
 <user-id>/<random-token>/file.<ascii-extension>
 ```
 
-Supabase RLS protects metadata. Netlify verifies the caller's Supabase JWT and user-prefixed R2 key before signing any private object operation. Existing Supabase Storage objects remain readable through the legacy provider path.
+Supabase RLS protects metadata. Netlify verifies the caller's Supabase JWT and user-prefixed R2 key before signing any private object operation. The schema retains a legacy provider path for installations that have not yet migrated old Supabase Storage objects.
 
 ## Tech Stack
 
@@ -108,7 +108,6 @@ Configure `.env.local`:
 ```dotenv
 VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_YOUR_KEY
-VITE_STORAGE_QUOTA_BYTES=1099511627776
 VITE_MAX_FILE_SIZE_BYTES=5497558138880
 ```
 
@@ -147,6 +146,7 @@ The migrations create:
 - Ownership constraints, indexes, and helper functions
 - Postgres RLS policies
 - Storage read/write policies
+- Atomic upload reservations and server-enforced per-account/global quotas
 - Realtime publication for private quick-text inserts
 - Server-only administrator functions and permissions
 
@@ -210,6 +210,9 @@ New files upload directly from the browser to R2 through server-signed multipart
 - Failed parts retry with fresh one-hour signed URLs.
 - Pause/resume state and completed part ETags are retained in R2. Re-select the same local file to continue after a refresh.
 - R2 supports multipart objects up to **5 TiB**. Browser, network, account billing, and the configured UI limit can impose lower practical limits.
+- Xiaopan enforces a **10 GB decimal shared pool**. Each non-admin account is limited to **200 MB**. The administrator receives the unallocated balance: `10 GB − 200 MB × non-admin account count`.
+- The effective single-file limit is the lower of `VITE_MAX_FILE_SIZE_BYTES` and the account's remaining quota, and is shown next to the upload controls.
+- Quota is reserved atomically before part URLs are issued. The completed R2 object size is verified before its metadata is committed.
 - Incomplete multipart uploads are automatically aborted after seven days by R2.
 
 Official references:
@@ -233,7 +236,6 @@ Add these build variables in Netlify:
 ```text
 VITE_SUPABASE_URL
 VITE_SUPABASE_PUBLISHABLE_KEY
-VITE_STORAGE_QUOTA_BYTES
 VITE_MAX_FILE_SIZE_BYTES
 VITE_ADMIN_EMAIL
 ```
@@ -243,7 +245,6 @@ Required server-only signing variables:
 ```text
 SUPABASE_URL
 SUPABASE_PUBLISHABLE_KEY
-SUPABASE_SECRET_KEY
 R2_ACCOUNT_ID
 R2_BUCKET_NAME
 R2_ACCESS_KEY_ID
@@ -266,6 +267,7 @@ npx netlify deploy --prod
 ## Security Notes
 
 - Every exposed user-data table has RLS enabled.
+- Netlify file operations use the caller's Supabase JWT and narrowly scoped security-definer RPCs; no Supabase service-role key is required in Netlify.
 - Authenticated policies always include an ownership predicate.
 - Anonymous roles have no direct access to private file, text, or share records.
 - The Storage bucket remains private.

@@ -17,7 +17,12 @@ import {
   X,
 } from "lucide-react";
 import { deleteManagedUser, getAdminOverview } from "./lib/admin";
-import { formatBytes, formatDate, initials } from "./lib/format";
+import {
+  formatBytes,
+  formatDate,
+  formatQuotaBytes,
+  initials,
+} from "./lib/format";
 import { supabase } from "./lib/supabase";
 import type { AdminOverview, AdminUserSummary } from "./types";
 
@@ -65,7 +70,11 @@ export default function AdminApp(props: {
         { label: "用户总数", value: String(overview.totals.users), icon: <Users size={20} /> },
         { label: "文件总数", value: String(overview.totals.files), icon: <File size={20} /> },
         { label: "文件夹", value: String(overview.totals.folders), icon: <Folder size={20} /> },
-        { label: "已用容量", value: formatBytes(overview.totals.usedBytes), icon: <HardDrive size={20} /> },
+        {
+          label: "全站存储",
+          value: `${formatBytes(overview.totals.usedBytes)} / ${formatQuotaBytes(overview.totals.storageBytes)}`,
+          icon: <HardDrive size={20} />,
+        },
       ]
     : [];
 
@@ -133,7 +142,10 @@ export default function AdminApp(props: {
               <div className="admin-panel-head">
                 <div>
                   <h2>用户管理</h2>
-                  <p>{overview?.totals.users ?? 0} 个账户，删除后将同步清理其网盘文件。</p>
+                  <p>
+                    {overview?.totals.personalUserCount ?? 0} 个普通账户，每人
+                    200 MB；管理员使用剩余预留空间。
+                  </p>
                 </div>
                 <label className="admin-search">
                   <Search size={17} />
@@ -156,10 +168,19 @@ export default function AdminApp(props: {
                     <div className="admin-user-cell">
                       <span className="avatar">{initials(user.email)}</span>
                       <span><strong>{user.email}</strong><small>注册于 {formatDate(user.createdAt)}</small></span>
-                      {user.id === overview?.currentAdminId && <em>当前管理员</em>}
+                      {user.isAdmin && (
+                        <em>
+                          {user.id === overview?.currentAdminId
+                            ? "当前管理员"
+                            : "管理员"}
+                        </em>
+                      )}
                     </div>
                     <span>{user.fileCount} 文件 · {user.folderCount} 文件夹</span>
-                    <strong>{formatBytes(user.usedBytes)}</strong>
+                    <strong>
+                      {formatBytes(user.usedBytes)} /{" "}
+                      {formatQuotaBytes(user.quotaBytes)}
+                    </strong>
                     <span>{user.lastSignInAt ? formatDate(user.lastSignInAt) : "从未登录"}</span>
                     <button
                       className="admin-delete-button"
@@ -184,7 +205,8 @@ export default function AdminApp(props: {
             <div className="confirm-copy">
               <span className="danger-icon"><Trash2 size={21} /></span>
               <p>
-                将永久删除 <strong>{target.email}</strong> 的账户、文件记录和 Storage 中的对象。此操作无法撤销。
+                将永久删除 <strong>{target.email}</strong>{" "}
+                的账户、文件记录和 R2/旧 Storage 对象。此操作无法撤销。
               </p>
             </div>
             <div className="modal-actions">

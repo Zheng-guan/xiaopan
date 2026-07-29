@@ -1,10 +1,7 @@
 import type { Config, Context } from "@netlify/functions";
 import { DeleteObjectsCommand } from "@aws-sdk/client-s3";
 import { bearerToken, json, readJson } from "./_shared/http";
-import {
-  adminSupabase,
-  authenticatedSupabase,
-} from "./_shared/supabase";
+import { authenticatedSupabase } from "./_shared/supabase";
 import { r2Client } from "./_shared/r2";
 
 export default async (request: Request, _context: Context) => {
@@ -14,51 +11,38 @@ export default async (request: Request, _context: Context) => {
   const authentication = await authenticatedSupabase(bearerToken(request));
   if (!authentication?.user.email) return json({ error: "Unauthorized" }, 401);
 
-  const admin = adminSupabase();
-  if (!admin) return json({ error: "Server administration is not configured" }, 503);
-  const normalizedEmail = authentication.user.email.trim().toLowerCase();
-  const { data: administrator, error: administratorError } = await admin
-    .from("admin_users")
-    .select("id")
-    .eq("email", normalizedEmail)
-    .maybeSingle();
-  if (administratorError || !administrator) return json({ error: "Forbidden" }, 403);
-
   const body = await readJson<{ userId?: string }>(request);
   if (!body?.userId || !uuidPattern.test(body.userId)) {
     return json({ error: "有效的用户 ID 是必需的" }, 400);
   }
-  if (body.userId === authentication.user.id) {
-    return json({ error: "不能删除当前登录的管理员账户" }, 400);
+  const adminEndpoint = `${authentication.environment.url}/functions/v1/admin-dashboard`;
+  const adminHeaders = {
+    Authorization: `Bearer ${bearerToken(request)}`,
+    apikey: authentication.environment.publishableKey,
+    "Content-Type": "application/json",
+  };
+  const prepareResponse = await fetch(adminEndpoint, {
+    method: "POST",
+    headers: adminHeaders,
+    body: JSON.stringify({
+      action: "prepare-delete-user",
+      userId: body.userId,
+    }),
+  });
+  const prepared = (await prepareResponse.json().catch(() => ({}))) as {
+    ready?: true;
+    r2Paths?: string[];
+    error?: string;
+  };
+  if (!prepareResponse.ok || !prepared.ready || !Array.isArray(prepared.r2Paths)) {
+    return json({ error: prepared.error || "管理员校验失败" }, prepareResponse.status);
   }
-
-  const { data: target, error: targetError } =
-    await admin.auth.admin.getUserById(body.userId);
-  if (targetError || !target.user) return json({ error: "用户不存在" }, 404);
-  if (target.user.email) {
-    const { data: protectedAdmin, error } = await admin
-      .from("admin_users")
-      .select("id")
-      .eq("email", target.user.email.trim().toLowerCase())
-      .maybeSingle();
-    if (error) return json({ error: "管理员校验失败" }, 500);
-    if (protectedAdmin) return json({ error: "不能删除管理员账户" }, 400);
+  const r2Paths = prepared.r2Paths.filter(
+    (path) => typeof path === "string" && path.startsWith(`${body.userId}/`),
+  );
+  if (r2Paths.length !== prepared.r2Paths.length) {
+    return json({ error: "用户文件路径校验失败" }, 409);
   }
-
-  const { data: files, error: filesError } = await admin
-    .from("drive_items")
-    .select("storage_path, storage_provider")
-    .eq("user_id", body.userId)
-    .eq("kind", "file")
-    .not("storage_path", "is", null);
-  if (filesError) return json({ error: "读取用户文件失败" }, 500);
-
-  const r2Paths = (files ?? [])
-    .filter((file) => file.storage_provider === "r2")
-    .map((file) => file.storage_path as string);
-  const supabasePaths = (files ?? [])
-    .filter((file) => file.storage_provider !== "r2")
-    .map((file) => file.storage_path as string);
 
   const r2 = r2Client();
   if (r2Paths.length && !r2) {
@@ -79,17 +63,25 @@ export default async (request: Request, _context: Context) => {
         );
       }
     }
-    for (let index = 0; index < supabasePaths.length; index += 100) {
-      const { error } = await admin.storage
-        .from("drive")
-        .remove(supabasePaths.slice(index, index + 100));
-      if (error) throw error;
+    const deleteResponse = await fetch(adminEndpoint, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        action: "delete-user",
+        userId: body.userId,
+      }),
+    });
+    const deleted = (await deleteResponse.json().catch(() => ({}))) as {
+      deleted?: true;
+      removedObjects?: number;
+      error?: string;
+    };
+    if (!deleteResponse.ok || !deleted.deleted) {
+      throw new Error(deleted.error || "Supabase user deletion failed");
     }
-    const { error } = await admin.auth.admin.deleteUser(body.userId);
-    if (error) throw error;
     return json({
       deleted: true,
-      removedObjects: r2Paths.length + supabasePaths.length,
+      removedObjects: Number(deleted.removedObjects ?? r2Paths.length),
     });
   } catch (error) {
     console.error("Administrator user deletion failed", error);
