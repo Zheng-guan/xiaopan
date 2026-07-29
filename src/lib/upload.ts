@@ -8,10 +8,15 @@ import {
 const SIX_MIB = 6 * 1024 * 1024;
 
 function sanitizeObjectName(name: string) {
-  return name
+  // Strip path separators and control characters, then percent-encode so the
+  // object key is pure ASCII. Supabase Storage rejects non-ASCII keys with a
+  // 400 "Invalid key" (mobile clients hit this especially often), while the
+  // human-readable name is preserved separately in metadata and drive_items.
+  const cleaned = name
     .normalize("NFKC")
     .replace(/[\/\\\u0000-\u001f\u007f]/g, "_")
     .slice(0, 180);
+  return encodeURIComponent(cleaned).slice(0, 255);
 }
 
 async function stableToken(value: string) {
