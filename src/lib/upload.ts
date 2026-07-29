@@ -7,16 +7,22 @@ import {
 
 const SIX_MIB = 6 * 1024 * 1024;
 
-function sanitizeObjectName(name: string) {
-  // Strip path separators and control characters, then percent-encode so the
-  // object key is pure ASCII. Supabase Storage rejects non-ASCII keys with a
-  // 400 "Invalid key" (mobile clients hit this especially often), while the
-  // human-readable name is preserved separately in metadata and drive_items.
-  const cleaned = name
+// Extract a safe ASCII-only extension (e.g. ".mp3", ".pdf"). Supabase Storage
+// rejects object keys that contain non-ASCII characters with a 400 "Invalid key"
+// — percent-encoding does not help because the server decodes before validating.
+// The storage object name is therefore kept pure ASCII; the human-readable
+// (possibly non-ASCII) name lives only in metadata and drive_items.name, which
+// drive the UI listing and the download filename.
+function asciiExtension(name: string) {
+  const dot = name.lastIndexOf(".");
+  if (dot < 1 || dot === name.length - 1) return "";
+  const ext = name
+    .slice(dot)
     .normalize("NFKC")
-    .replace(/[\/\\\u0000-\u001f\u007f]/g, "_")
-    .slice(0, 180);
-  return encodeURIComponent(cleaned).slice(0, 255);
+    .toLowerCase()
+    .replace(/[^a-z0-9.]/g, "")
+    .slice(0, 16);
+  return /^[.][a-z0-9]+$/.test(ext) ? ext : "";
 }
 
 async function stableToken(value: string) {
@@ -53,7 +59,10 @@ export async function createResumableUpload(
   const token = await stableToken(
     `${options.userId}:${options.parentId ?? "root"}:${options.displayName}:${options.file.size}:${options.file.lastModified}`,
   );
-  const storagePath = `${options.userId}/${token}/${sanitizeObjectName(options.displayName)}`;
+  // Object key is pure ASCII: <userId>/<token>/file<ext>. The token folder keeps
+  // each upload isolated and resumable; the original (non-ASCII) name is stored
+  // only in metadata + drive_items and never reaches the storage key.
+  const storagePath = `${options.userId}/${token}/file${asciiExtension(options.displayName)}`;
 
   const upload = new tus.Upload(options.file, {
     endpoint: `https://${projectRef}.storage.supabase.co/storage/v1/upload/resumable`,
