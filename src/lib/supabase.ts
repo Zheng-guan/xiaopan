@@ -33,5 +33,5 @@ export const storageQuotaBytes = Number(
 );
 
 export const maxFileSizeBytes = Number(
-  import.meta.env.VITE_MAX_FILE_SIZE_BYTES || 50 * 1024 ** 3,
+  import.meta.env.VITE_MAX_FILE_SIZE_BYTES || 5 * 1024 ** 4,
 );

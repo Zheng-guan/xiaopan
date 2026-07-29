@@ -46,8 +46,8 @@ Browser
   │    ├─ drive_items  ── user-scoped file metadata with RLS
   │    ├─ quick_texts  ── private cross-device text with RLS + Realtime
   │    └─ shares       ── owner-managed share records with RLS
-  ├─ Supabase Storage TUS endpoint ── direct resumable uploads
-  └─ /api/signed-download ── optional Netlify Function
+  ├─ Netlify Functions ── validate Supabase JWTs and sign R2 requests
+  └─ Cloudflare R2 ── direct browser multipart upload/download
 
 Public visitor
   └─ public-share Supabase Edge Function
@@ -61,22 +61,23 @@ Administrator
        └─ reads statistics or removes users and their private objects
 ```
 
-Storage object paths always follow:
+New R2 object keys always follow:
 
 ```text
-<user-id>/<stable-upload-token>/<safe-file-name>
+<user-id>/<random-token>/file.<ascii-extension>
 ```
 
-Both Postgres RLS and Storage policies verify ownership. Modifying the frontend cannot grant access to another user's rows or objects.
+Supabase RLS protects metadata. Netlify verifies the caller's Supabase JWT and user-prefixed R2 key before signing any private object operation. Existing Supabase Storage objects remain readable through the legacy provider path.
 
 ## Tech Stack
 
 - React 19
 - TypeScript 5
 - Vite 7
-- Supabase Auth, Postgres, Realtime, and Storage
+- Supabase Auth, Postgres, and Realtime
+- Cloudflare R2 multipart object storage
 - `@supabase/supabase-js`
-- `tus-js-client`
+- AWS SDK for JavaScript (server-side R2 signing only)
 - Lucide Icons
 - Netlify and Netlify Functions
 
@@ -84,6 +85,7 @@ Both Postgres RLS and Storage policies verify ownership. Modifying the frontend 
 
 - Node.js 22 or newer
 - A Supabase project
+- A Cloudflare account and R2 bucket
 - A Netlify account for deployment
 
 ## Local Setup
@@ -106,9 +108,8 @@ Configure `.env.local`:
 ```dotenv
 VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_YOUR_KEY
-VITE_STORAGE_QUOTA_BYTES=1073741824
-VITE_MAX_FILE_SIZE_BYTES=52428800
-VITE_ADMIN_EMAIL=admin@example.com
+VITE_STORAGE_QUOTA_BYTES=1099511627776
+VITE_MAX_FILE_SIZE_BYTES=5497558138880
 ```
 
 Use a Supabase publishable key in the browser. Never expose a secret key or service-role key through a `VITE_` variable.
@@ -178,24 +179,44 @@ Add the normalized administrator email to `admin_users`, then set the same value
 
 The administrator entry displays only a password field. The fixed email is used internally for Supabase Auth, while actual authorization is enforced by the server-side allowlist—not by frontend metadata or an editable email field. Never store the administrator password in source code.
 
+## Cloudflare R2 Setup
+
+1. In **R2 → Manage R2 API Tokens**, create an S3 API token with **Object Read & Write** access limited to the `xiaopan` bucket.
+2. Copy the Access Key ID and Secret Access Key when shown. Store them only as Netlify server variables.
+3. Configure this CORS policy on the `xiaopan` bucket:
+
+```json
+[
+  {
+    "AllowedOrigins": [
+      "https://xiaopan-drive.netlify.app",
+      "http://localhost:5173"
+    ],
+    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+`ETag` exposure is required to complete multipart uploads. Add each real preview/custom origin before testing it; do not make the bucket public.
+
 ## Resumable Uploads and Limits
 
-Xiaopan follows Supabase's current Storage recommendations:
+New files upload directly from the browser to R2 through server-signed multipart URLs:
 
-- Resumable TUS uploads are recommended for files larger than 6 MB or unreliable networks.
-- Supabase currently requires a **6 MB** TUS chunk size.
-- A resumable upload URL remains valid for up to **24 hours**.
-- The Free plan's maximum global file-size setting is **50 MB**.
-- Pro and Team projects can configure limits up to **500 GB**.
-- A bucket-level limit cannot exceed the project's global limit.
-
-The browser stores upload fingerprints locally. Re-selecting the same file after an interruption resumes it from the uploaded position.
+- Base part size is **10 MiB**, increasing automatically before the 10,000-part limit.
+- Failed parts retry with fresh one-hour signed URLs.
+- Pause/resume state and completed part ETags are retained in R2. Re-select the same local file to continue after a refresh.
+- R2 supports multipart objects up to **5 TiB**. Browser, network, account billing, and the configured UI limit can impose lower practical limits.
+- Incomplete multipart uploads are automatically aborted after seven days by R2.
 
 Official references:
 
-- [Resumable uploads](https://supabase.com/docs/guides/storage/uploads/resumable-uploads)
-- [Storage file limits](https://supabase.com/docs/guides/storage/uploads/file-limits)
-- [Storage access control](https://supabase.com/docs/guides/storage/security/access-control)
+- [R2 upload objects](https://developers.cloudflare.com/r2/objects/upload-objects/)
+- [R2 presigned URLs](https://developers.cloudflare.com/r2/api/s3/presigned-urls/)
+- [R2 S3 API compatibility](https://developers.cloudflare.com/r2/api/s3/api/)
 
 ## Netlify Deployment
 
@@ -217,12 +238,16 @@ VITE_MAX_FILE_SIZE_BYTES
 VITE_ADMIN_EMAIL
 ```
 
-Optional server-side signed-download variables:
+Required server-only signing variables:
 
 ```text
 SUPABASE_URL
 SUPABASE_PUBLISHABLE_KEY
 SUPABASE_SECRET_KEY
+R2_ACCOUNT_ID
+R2_BUCKET_NAME
+R2_ACCESS_KEY_ID
+R2_SECRET_ACCESS_KEY
 ```
 
 Deploy a preview first:

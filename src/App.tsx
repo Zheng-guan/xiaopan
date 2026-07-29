@@ -10,7 +10,6 @@ import {
   type ReactNode,
 } from "react";
 import type { Session } from "@supabase/supabase-js";
-import type { Upload } from "tus-js-client";
 import {
   Archive,
   ArrowDownAZ,
@@ -80,7 +79,10 @@ import {
   storageQuotaBytes,
   supabase,
 } from "./lib/supabase";
-import { createResumableUpload } from "./lib/upload";
+import {
+  createResumableUpload,
+  type ResumableUpload,
+} from "./lib/upload";
 import type {
   CategoryFilter,
   DriveItem,
@@ -559,7 +561,7 @@ function DriveApp({
   const [uploadPanelOpen, setUploadPanelOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const uploads = useRef(new Map<string, Upload>());
+  const uploads = useRef(new Map<string, ResumableUpload>());
   const dragTargets = useRef<DriveItem[]>([]);
   const dropTargetRef = useRef<DropTargetKey>(null);
   const touchDragSession = useRef<TouchDragSession | null>(null);

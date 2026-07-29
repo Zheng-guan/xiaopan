@@ -46,8 +46,8 @@
   │    ├─ drive_items  ── RLS 保护的文件元数据
   │    ├─ quick_texts  ── RLS + Realtime 保护的文字快传
   │    └─ shares       ── 仅所有者管理的分享记录
-  ├─ Supabase Storage TUS ── 浏览器直传与断点续传
-  └─ /api/signed-download ── 可选 Netlify Function
+  ├─ Netlify Functions ── 验证 Supabase JWT 并签发 R2 请求
+  └─ Cloudflare R2 ── 浏览器直连分片上传与下载
 
 公开访问者
   └─ public-share Supabase Edge Function
@@ -61,22 +61,23 @@
        └─ 读取统计或删除用户及其私有对象
 ```
 
-Storage 对象路径固定为：
+新的 R2 对象 key 固定为：
 
 ```text
-<user-id>/<stable-upload-token>/<safe-file-name>
+<user-id>/<random-token>/file.<ascii-extension>
 ```
 
-Postgres RLS 和 Storage policies 都会校验所有权。即使前端代码被修改，也无法读取其他用户的数据或文件。
+Supabase RLS 保护文件元数据。Netlify 在签发任何 R2 私有对象操作前都会验证 Supabase JWT 和用户路径前缀。已有的 Supabase Storage 文件仍通过兼容路径下载。
 
 ## 技术栈
 
 - React 19
 - TypeScript 5
 - Vite 7
-- Supabase Auth、Postgres、Realtime 和 Storage
+- Supabase Auth、Postgres 和 Realtime
+- Cloudflare R2 分片对象存储
 - `@supabase/supabase-js`
-- `tus-js-client`
+- AWS SDK for JavaScript（只在服务端签名）
 - Lucide Icons
 - Netlify 与 Netlify Functions
 
@@ -84,6 +85,7 @@ Postgres RLS 和 Storage policies 都会校验所有权。即使前端代码被�
 
 - Node.js 22 或更高版本
 - 一个 Supabase 项目
+- 一个 Cloudflare 账户和 R2 存储桶
 - 用于部署的 Netlify 账户
 
 ## 本地运行
@@ -106,9 +108,8 @@ Copy-Item .env.example .env.local
 ```dotenv
 VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_YOUR_KEY
-VITE_STORAGE_QUOTA_BYTES=1073741824
-VITE_MAX_FILE_SIZE_BYTES=52428800
-VITE_ADMIN_EMAIL=admin@example.com
+VITE_STORAGE_QUOTA_BYTES=1099511627776
+VITE_MAX_FILE_SIZE_BYTES=5497558138880
 ```
 
 浏览器只能使用 Supabase publishable key。绝不能通过带 `VITE_` 前缀的变量暴露 Secret Key 或 service-role key。
@@ -178,24 +179,44 @@ npx supabase functions deploy public-share --no-verify-jwt
 
 管理员入口只显示密码框，固定邮箱仅在内部用于 Supabase Auth 登录。真正的管理员权限来自服务端白名单，而不是前端邮箱字段或可编辑的用户元数据。不要把管理员密码写进源码。
 
+## 配置 Cloudflare R2
+
+1. 进入 **R2 → Manage R2 API Tokens**，创建一个仅限 `xiaopan` 存储桶、权限为 **Object Read & Write** 的 S3 API Token。
+2. 创建后立即复制 Access Key ID 和 Secret Access Key，只保存到 Netlify 服务端环境变量。
+3. 给 `xiaopan` 存储桶设置下面的 CORS：
+
+```json
+[
+  {
+    "AllowedOrigins": [
+      "https://xiaopan-drive.netlify.app",
+      "http://localhost:5173"
+    ],
+    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+必须暴露 `ETag`，否则浏览器无法完成分片合并。测试预览域名或自定义域名前，应把真实来源加入列表；不要把存储桶设为公开。
+
 ## 大文件断点续传与限制
 
-小盘按照 Supabase 当前 Storage 官方建议实现：
+新文件通过服务端签名的分片地址，由浏览器直接上传到 R2：
 
-- 超过 6 MB 或网络不稳定时，推荐使用 TUS 可恢复上传。
-- Supabase 当前要求 TUS 分片大小为 **6 MB**。
-- 单个可恢复上传地址最长有效 **24 小时**。
-- Free 方案的全局单文件上限最高为 **50 MB**。
-- Pro 和 Team 方案最高可以设置为 **500 GB**。
-- Bucket 限制不能高于项目的全局限制。
-
-浏览器会在本地保存上传指纹。上传中断后重新选择同一个文件，即可从已经上传的位置继续。
+- 基础分片大小为 **10 MiB**，大文件会自动增大分片，避免超过 10,000 个分片。
+- 失败的分片会使用新的一小时临时签名地址重试。
+- R2 保存已完成分片；刷新后重新选择同一个本地文件即可继续。
+- R2 分片上传的单对象官方上限为 **5 TiB**。浏览器、网络、账户计费和前端配置可能让实际可用上限更低。
+- 未完成的分片上传会由 R2 在七天后自动终止。
 
 官方资料：
 
-- [可恢复上传](https://supabase.com/docs/guides/storage/uploads/resumable-uploads)
-- [Storage 文件限制](https://supabase.com/docs/guides/storage/uploads/file-limits)
-- [Storage 访问控制](https://supabase.com/docs/guides/storage/security/access-control)
+- [R2 上传对象](https://developers.cloudflare.com/r2/objects/upload-objects/)
+- [R2 预签名 URL](https://developers.cloudflare.com/r2/api/s3/presigned-urls/)
+- [R2 S3 API 兼容性](https://developers.cloudflare.com/r2/api/s3/api/)
 
 ## 部署到 Netlify
 
@@ -217,12 +238,16 @@ VITE_MAX_FILE_SIZE_BYTES
 VITE_ADMIN_EMAIL
 ```
 
-可选的服务端签名下载变量：
+必需的服务端签名变量：
 
 ```text
 SUPABASE_URL
 SUPABASE_PUBLISHABLE_KEY
 SUPABASE_SECRET_KEY
+R2_ACCOUNT_ID
+R2_BUCKET_NAME
+R2_ACCESS_KEY_ID
+R2_SECRET_ACCESS_KEY
 ```
 
 先发布预览：

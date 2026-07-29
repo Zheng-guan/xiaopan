@@ -9,6 +9,7 @@ export interface DriveItem {
   size: number;
   mime_type: string | null;
   storage_path: string | null;
+  storage_provider: "supabase" | "r2";
   created_at: string;
   updated_at: string;
 }

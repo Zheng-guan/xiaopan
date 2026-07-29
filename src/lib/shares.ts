@@ -104,6 +104,17 @@ export async function getPublicShare(token: string) {
 }
 
 export async function getPublicFileDownload(token: string) {
-  const result = await publicShareRequest<{ url: string }>(token, "download");
+  const response = await fetch("/api/public-download", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  const result = (await response.json().catch(() => ({}))) as {
+    url?: string;
+    error?: string;
+  };
+  if (!response.ok || !result.url) {
+    throw new Error(result.error || "暂时无法下载共享文件");
+  }
   return result.url;
 }

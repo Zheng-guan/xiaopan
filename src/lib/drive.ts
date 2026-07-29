@@ -6,6 +6,7 @@ import type {
   SortDirection,
   SortKey,
 } from "../types";
+import { deleteR2Object } from "./upload";
 
 const bucket = "drive";
 
@@ -129,6 +130,7 @@ export async function createFileRecord(input: {
       size: input.size,
       mime_type: input.mimeType || "application/octet-stream",
       storage_path: input.storagePath,
+      storage_provider: "r2",
     })
     .select()
     .single();
@@ -173,16 +175,30 @@ async function descendantsOf(items: DriveItem[]) {
 
 export async function deleteDriveItems(items: DriveItem[]) {
   const allItems = await descendantsOf(items);
-  const paths = allItems
-    .filter((item) => item.kind === "file" && item.storage_path)
+  const supabasePaths = allItems
+    .filter(
+      (item) =>
+        item.kind === "file" &&
+        item.storage_path &&
+        item.storage_provider !== "r2",
+    )
+    .map((item) => item.storage_path as string);
+  const r2Paths = allItems
+    .filter(
+      (item) =>
+        item.kind === "file" &&
+        item.storage_path &&
+        item.storage_provider === "r2",
+    )
     .map((item) => item.storage_path as string);
 
-  for (let index = 0; index < paths.length; index += 100) {
+  for (let index = 0; index < supabasePaths.length; index += 100) {
     const { error } = await supabase.storage
       .from(bucket)
-      .remove(paths.slice(index, index + 100));
+      .remove(supabasePaths.slice(index, index + 100));
     if (error) throw error;
   }
+  for (const path of r2Paths) await deleteR2Object(path);
 
   const { error } = await supabase
     .from("drive_items")
@@ -237,6 +253,9 @@ export async function signedDownloadUrl(item: DriveItem, accessToken: string) {
   }
 
   if (!item.storage_path) throw new Error("文件路径不存在");
+  if (item.storage_provider === "r2") {
+    throw new Error("R2 下载签名服务暂时不可用");
+  }
   const { data, error } = await supabase.storage
     .from(bucket)
     .createSignedUrl(item.storage_path, 60, { download: item.name });
@@ -245,5 +264,5 @@ export async function signedDownloadUrl(item: DriveItem, accessToken: string) {
 }
 
 export async function removeUploadedObject(storagePath: string) {
-  await supabase.storage.from(bucket).remove([storagePath]);
+  await deleteR2Object(storagePath);
 }

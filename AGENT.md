@@ -14,20 +14,20 @@ This file is the operating guide for anyone changing the repository. Preserve th
 | `src/ThemeToggle.tsx` | Persists `xiaopan:theme`, follows the system preference on first visit, and synchronizes tabs. |
 | `src/ShareCenter.tsx`, `src/QuickTextCenter.tsx` | Sharing and private cross-device text transfer. |
 | `src/AdminApp.tsx`, `src/lib/admin.ts` | Administrator UI and calls to the protected Supabase Edge Function. |
-| `src/lib/drive.ts`, `src/lib/upload.ts` | Drive operations, signed download flow, TUS resumable upload client. |
+| `src/lib/drive.ts`, `src/lib/upload.ts` | Drive operations and the direct-to-R2 multipart upload client. |
 | `src/styles.css` | Design tokens, responsive UI, and dark-theme overrides. |
 | `supabase/migrations/` | Ordered database schema, RLS, and Storage-policy changes. |
 | `supabase/functions/` | Supabase Edge Functions for administration and public sharing. |
-| `netlify/functions/signed-download.ts` | Server-only signed download URL endpoint. |
+| `netlify/functions/` | Authenticated R2 multipart, download, cleanup, and administration endpoints. |
 | `netlify.toml` | Vite build, Netlify Functions, SPA redirect, and security headers. |
 
 ## Non-negotiable security rules
 
 1. Never expose `SUPABASE_SECRET_KEY`, a service-role key, Netlify tokens, or user credentials in browser code, commits, README examples, screenshots, or logs.
 2. Browser code may use only the Supabase URL and publishable key (`VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`).
-3. Treat RLS and Storage policies as the authorization boundary. Client-side checks are only UX conveniences.
-4. Keep direct objects under the authenticated owner’s path. Do not create a query, download path, share feature, or admin shortcut that bypasses ownership checks.
-5. Keep privileged tasks server-side. `signed-download` verifies the caller’s Supabase session before using the server secret to sign a 60-second URL.
+3. Treat Postgres RLS and server-side R2 signing as the authorization boundary. Client-side checks are only UX conveniences.
+4. Keep R2 objects under the authenticated owner's UUID prefix. Never accept an arbitrary key without verifying this prefix or its database ownership.
+5. Keep privileged tasks server-side. R2 API keys may exist only in Netlify runtime variables; signed URLs should be short lived.
 6. Administrator authority is enforced through the `admin_users` database allowlist and the `admin-dashboard` Edge Function. Do not implement administrator access based only on a client-side email check.
 
 ## Development workflow
@@ -65,7 +65,10 @@ npm run build
 | `VITE_SUPABASE_URL` | `SUPABASE_URL` |
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | `SUPABASE_PUBLISHABLE_KEY` |
 | `VITE_STORAGE_QUOTA_BYTES` | `SUPABASE_SECRET_KEY` |
-| `VITE_MAX_FILE_SIZE_BYTES` | |
+| `VITE_MAX_FILE_SIZE_BYTES` | `R2_ACCOUNT_ID` |
+| | `R2_BUCKET_NAME` |
+| | `R2_ACCESS_KEY_ID` |
+| | `R2_SECRET_ACCESS_KEY` |
 
 `VITE_ADMIN_EMAIL` is presentation-only. It must not be used as an authorization mechanism.
 

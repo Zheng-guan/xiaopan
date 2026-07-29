@@ -37,8 +37,21 @@ export async function getAdminOverview(session: Session) {
 }
 
 export async function deleteManagedUser(session: Session, userId: string) {
-  return adminRequest<{ deleted: true; removedObjects: number }>(session, {
-    action: "delete-user",
-    userId,
+  const response = await fetch("/api/admin-delete-user", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ userId }),
   });
+  const payload = (await response.json().catch(() => ({}))) as {
+    deleted?: true;
+    removedObjects?: number;
+    error?: string;
+  };
+  if (!response.ok || !payload.deleted) {
+    throw new Error(payload.error || "删除用户失败");
+  }
+  return payload as { deleted: true; removedObjects: number };
 }
