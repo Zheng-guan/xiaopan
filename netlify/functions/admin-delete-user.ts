@@ -81,7 +81,7 @@ export default async (request: Request, _context: Context) => {
     }
     return json({
       deleted: true,
-      removedObjects: Number(deleted.removedObjects ?? r2Paths.length),
+      removedObjects: r2Paths.length + Number(deleted.removedObjects ?? 0),
     });
   } catch (error) {
     console.error("Administrator user deletion failed", error);
