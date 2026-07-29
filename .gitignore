@@ -10,3 +10,6 @@ supabase/.temp/
 *.tsbuildinfo
 .DS_Store
 Thumbs.db
+AGENT.md
+AGENTS.md
+HANDOFF.md
