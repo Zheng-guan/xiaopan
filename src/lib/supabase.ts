@@ -29,5 +29,5 @@ export const projectRef = (() => {
 })();
 
 export const maxFileSizeBytes = Number(
-  import.meta.env.VITE_MAX_FILE_SIZE_BYTES || 5 * 1024 ** 4,
+  import.meta.env.VITE_MAX_FILE_SIZE_BYTES || 10_000_000_000,
 );

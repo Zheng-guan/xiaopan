@@ -108,7 +108,7 @@ Copy-Item .env.example .env.local
 ```dotenv
 VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_YOUR_KEY
-VITE_MAX_FILE_SIZE_BYTES=5497558138880
+VITE_MAX_FILE_SIZE_BYTES=10000000000
 ```
 
 浏览器只能使用 Supabase publishable key。绝不能通过带 `VITE_` 前缀的变量暴露 Secret Key 或 service-role key。
@@ -211,7 +211,8 @@ npx supabase functions deploy public-share --no-verify-jwt
 - R2 保存已完成分片；刷新后重新选择同一个本地文件即可继续。
 - R2 分片上传的单对象官方上限为 **5 TiB**。浏览器、网络、账户计费和前端配置可能让实际可用上限更低。
 - 小盘强制使用 **10 GB（十进制）共享池**。每个普通账户最多 **200 MB**；管理员额度为剩余未分配空间：`10 GB − 200 MB × 普通账户数`。
-- 当前单文件上限取 `VITE_MAX_FILE_SIZE_BYTES` 与账户剩余空间中的较小值，并直接显示在上传控件旁。
+- 管理员单文件上限为 **10 GB**。普通账户总额度仍为 **200 MB**，所以其单文件实际上限不会超过账户当前剩余空间。
+- 实际限制取 `VITE_MAX_FILE_SIZE_BYTES` 与账户剩余空间中的较小值。云盘界面只显示账户总容量使用情况，不再单独显示单文件上限标识。
 - 服务端会在签发分片地址前原子预留额度，并在写入文件记录前核验 R2 对象的实际大小。
 - 未完成的分片上传会由 R2 在七天后自动终止。
 

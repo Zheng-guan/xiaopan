@@ -108,7 +108,7 @@ Configure `.env.local`:
 ```dotenv
 VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_YOUR_KEY
-VITE_MAX_FILE_SIZE_BYTES=5497558138880
+VITE_MAX_FILE_SIZE_BYTES=10000000000
 ```
 
 Use a Supabase publishable key in the browser. Never expose a secret key or service-role key through a `VITE_` variable.
@@ -211,7 +211,8 @@ New files upload directly from the browser to R2 through server-signed multipart
 - Pause/resume state and completed part ETags are retained in R2. Re-select the same local file to continue after a refresh.
 - R2 supports multipart objects up to **5 TiB**. Browser, network, account billing, and the configured UI limit can impose lower practical limits.
 - Xiaopan enforces a **10 GB decimal shared pool**. Each non-admin account is limited to **200 MB**. The administrator receives the unallocated balance: `10 GB − 200 MB × non-admin account count`.
-- The effective single-file limit is the lower of `VITE_MAX_FILE_SIZE_BYTES` and the account's remaining quota, and is shown next to the upload controls.
+- The administrator's single-file ceiling is **10 GB**. A non-admin account remains limited to **200 MB total**, so its effective single-file limit cannot exceed its remaining account quota.
+- The effective limit is the lower of `VITE_MAX_FILE_SIZE_BYTES` and the account's remaining quota. The drive UI shows total account usage without a separate single-file-limit label.
 - Quota is reserved atomically before part URLs are issued. The completed R2 object size is verified before its metadata is committed.
 - Incomplete multipart uploads are automatically aborted after seven days by R2.
 

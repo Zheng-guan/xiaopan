@@ -662,9 +662,7 @@ function DriveApp({
     const uploadLimit = Math.min(maxFileSizeBytes, quota.remaining_bytes);
     const tooLarge = incoming.find((file) => file.size > uploadLimit);
     if (tooLarge) {
-      setToast(
-        `${tooLarge.name} 超过当前单文件上限 ${formatQuotaBytes(uploadLimit)}`,
-      );
+      setToast(`${tooLarge.name} 超过当前可用空间，无法上传`);
       return;
     }
     const totalSize = incoming.reduce((sum, file) => sum + file.size, 0);
@@ -1134,11 +1132,6 @@ function DriveApp({
   ];
 
   const accountQuotaBytes = quota?.quota_bytes ?? 0;
-  const remainingBytes = quota?.remaining_bytes ?? 0;
-  const uploadLimitBytes = Math.max(
-    0,
-    Math.min(maxFileSizeBytes, remainingBytes),
-  );
   const usagePercent = Math.min(
     100,
     accountQuotaBytes > 0 ? (usage.used_bytes / accountQuotaBytes) * 100 : 0,
@@ -1170,7 +1163,7 @@ function DriveApp({
         </div>
         <button
           className="upload-button"
-          title={`单个文件上限 ${formatQuotaBytes(uploadLimitBytes)}`}
+          title="上传文件"
           onClick={() => fileInput.current?.click()}
         >
           <Plus size={19} />
@@ -1223,7 +1216,6 @@ function DriveApp({
             已用 {formatBytes(usage.used_bytes)} /{" "}
             {formatQuotaBytes(accountQuotaBytes)}
           </p>
-          <p>单个文件上限：{formatQuotaBytes(uploadLimitBytes)}</p>
         </div>
         <div className="user-chip">
           <span className="avatar">{initials(session.user.email)}</span>
@@ -1364,24 +1356,12 @@ function DriveApp({
                 className="primary-button workspace-upload-action"
                 onClick={() => fileInput.current?.click()}
                 aria-label="上传文件"
-                title={`上传文件，单个文件上限 ${formatQuotaBytes(uploadLimitBytes)}`}
+                title="上传文件"
               >
                 <UploadCloud size={17} />
                 上传
               </button>
             </div>
-          </div>
-
-          <div className="upload-limit-banner" role="status">
-            <CircleAlert size={16} />
-            <span>
-              当前单个文件上传上限{" "}
-              <strong>{formatQuotaBytes(uploadLimitBytes)}</strong>
-              ，账号剩余空间 {formatQuotaBytes(remainingBytes)}
-              {quota?.reserved_bytes
-                ? `（上传任务已预留 ${formatQuotaBytes(quota.reserved_bytes)}）`
-                : ""}
-            </span>
           </div>
 
           <div className="toolbar">
@@ -1408,7 +1388,7 @@ function DriveApp({
                 <>
                   <span className="toolbar-hint desktop-drag-hint">
                     <UploadCloud size={16} />
-                    可将文件拖到此处上传 · 上限 {formatQuotaBytes(uploadLimitBytes)}
+                    可将文件拖到此处上传
                   </span>
                   <span className="toolbar-hint mobile-drag-hint">
                     <Move size={16} />
