@@ -9,16 +9,18 @@ Last updated: 2026-07-29 (Asia/Shanghai)
 | GitHub repository | `https://github.com/Zheng-guan/xiaopan` |
 | Production site | `https://xiaopan-drive.netlify.app` |
 | Netlify site | `xiaopan-drive` (`5fe119cb-b071-4efd-9414-48ca9de48890`) |
-| Last source commit | `5555d29 feat: add light and dark themes` |
-| Last production deploy | `6a68d2012c8df878eca872da` — ready |
+| Source branch | `main` |
+| Current release scope | Mobile folder/download fixes and desktop/mobile drag-to-move |
 | Deployment method | Netlify CLI production deploy; Vite build and `signed-download` function bundled successfully |
 
-The current production site was verified after deployment: it returned HTTP 200 and included the persisted theme initializer.
+The release restores the mobile new-folder and download controls and adds
+desktop drag-to-move plus mobile long-press drag-to-move. `npm run build`
+passed on 2026-07-29.
 
 ## Delivered capabilities
 
 - Email/password registration, sign-in, sign-out, and session persistence through Supabase Auth.
-- Private per-user drive with folders, rename, move, delete, multi-select, search, sorting, and usage display.
+- Private per-user drive with folders, rename, dialog-based and drag-based move, delete, multi-select, search, sorting, and usage display.
 - Drag-and-drop TUS resumable uploads with progress, speed, retries, pause/resume, and local continuation support.
 - Direct and signed streaming download paths.
 - File, text, and link sharing; a public-share view; and private cross-device text transfer.
@@ -77,12 +79,15 @@ After deployment, verify:
 3. Upload UI appears, can pause/resume, and does not permit a file over the configured client-side limit.
 4. Download and public-share links respect the expected permission or expiry.
 5. The moon/sun control switches between themes and the choice survives refresh.
+6. On mobile, new-folder and download controls remain visible; long-press a file or folder icon and drag it onto a folder or breadcrumb destination.
+7. On desktop, dragging selected or individual items onto folders and breadcrumb destinations moves them without opening the upload overlay.
 
 ## Current follow-up items
 
 - `npm ci` reported 16 dependency advisories (2 low, 14 high) on 2026-07-28. They did not block the production build. Review `npm audit` and upgrade deliberately in a separate change; do not apply `npm audit fix --force` without testing.
 - The client quota and per-file limit are pre-upload UX checks. Confirm real limits in Supabase Storage whenever the plan or bucket settings change.
 - Keep the live Supabase Auth redirect URLs aligned with the Netlify production URL and any preview domains used for testing.
+- Smoke-test mobile long-press drag and desktop drag-to-move with real signed-in accounts after every related UI change.
 
 ## Safe next handoff
 

@@ -868,6 +868,12 @@ body:has(.drive-shell) .topbar-actions {
   color: var(--green);
 }
 
+.breadcrumbs button.drop-target {
+  color: var(--green-2);
+  background: var(--green-soft);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 55%, transparent);
+}
+
 .workspace-heading h1 {
   margin: 0;
   font-size: clamp(26px, 3vw, 35px);
@@ -884,6 +890,10 @@ body:has(.drive-shell) .topbar-actions {
 .workspace-actions {
   display: flex;
   gap: 9px;
+}
+
+.mobile-drag-hint {
+  display: none;
 }
 
 .toolbar {
@@ -1037,6 +1047,26 @@ body:has(.drive-shell) .topbar-actions {
 .file-row:not(.file-head):hover,
 .file-row.selected {
   background: rgba(233, 242, 236, 0.62);
+}
+
+.draggable-item {
+  cursor: grab;
+  -webkit-user-drag: element;
+}
+
+.draggable-item:active {
+  cursor: grabbing;
+}
+
+.draggable-item.is-dragging {
+  opacity: 0.38;
+}
+
+.file-row.drop-target,
+.file-card.drop-target {
+  border-color: var(--green);
+  background: var(--green-soft);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--green) 58%, transparent);
 }
 
 .file-head {
@@ -1258,6 +1288,49 @@ input[type="checkbox"] {
 
 .file-card:hover .card-actions {
   display: flex;
+}
+
+.touch-drag-preview {
+  position: fixed;
+  z-index: 140;
+  max-width: min(260px, calc(100vw - 32px));
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 11px;
+  border: 1px solid color-mix(in srgb, var(--green) 70%, var(--line));
+  border-radius: 10px;
+  color: #102019;
+  background: color-mix(in srgb, var(--green) 88%, #fff);
+  box-shadow: 0 14px 34px rgba(20, 48, 34, 0.24);
+  pointer-events: none;
+  transform: translate(14px, calc(-100% - 14px));
+}
+
+.touch-drag-preview span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.touch-drag-preview strong {
+  min-width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: #fff;
+  background: #173f2d;
+  font-size: 10px;
+}
+
+body.touch-drag-active {
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .drop-overlay {
@@ -2006,22 +2079,32 @@ input[type="checkbox"] {
     font-size: 27px;
   }
 
-  .workspace-actions .secondary-button {
+  .workspace-actions {
+    gap: 6px;
+  }
+
+  .workspace-actions .workspace-share-action {
     display: none;
   }
 
+  .workspace-actions .workspace-folder-action,
   .workspace-actions .primary-button {
     width: 41px;
+    height: 41px;
     padding: 0;
     font-size: 0;
   }
 
-  .toolbar-hint {
+  .desktop-drag-hint {
     display: none;
   }
 
+  .mobile-drag-hint {
+    display: inline-flex;
+  }
+
   .toolbar {
-    justify-content: flex-end;
+    min-height: 52px;
   }
 
   .toolbar-left:has(strong) {
@@ -2037,7 +2120,8 @@ input[type="checkbox"] {
   }
 
   .file-row {
-    grid-template-columns: 28px minmax(0, 1fr) 72px 40px;
+    min-height: 62px;
+    grid-template-columns: 28px minmax(0, 1fr) 58px 84px;
   }
 
   .file-row > :nth-child(4) {
@@ -2056,8 +2140,51 @@ input[type="checkbox"] {
     display: none;
   }
 
+  .row-actions > .download-action {
+    width: 40px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+  }
+
+  .menu-wrap > button {
+    width: 40px;
+    height: 40px;
+  }
+
+  .context-menu {
+    top: 39px;
+  }
+
   .file-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .card-actions,
+  .file-card:hover .card-actions {
+    display: flex;
+  }
+
+  .card-actions button {
+    width: 40px;
+    height: 40px;
+  }
+
+  .card-check {
+    width: 40px;
+    height: 40px;
+    top: 8px;
+    right: 8px;
+  }
+
+  .draggable-item {
+    touch-action: pan-y;
+  }
+
+  .draggable-item .file-icon,
+  .draggable-item .card-icon {
+    touch-action: none;
+    -webkit-touch-callout: none;
   }
 
   .upload-center {
@@ -3370,6 +3497,22 @@ input[type="checkbox"] {
 [data-theme="dark"] .file-card.selected {
   border-color: #426b53;
   background: rgba(28, 53, 40, 0.72);
+}
+
+[data-theme="dark"] .file-row.drop-target,
+[data-theme="dark"] .file-card.drop-target,
+[data-theme="dark"] .breadcrumbs button.drop-target {
+  border-color: var(--green);
+  color: var(--ink);
+  background: rgba(28, 73, 49, 0.88);
+  box-shadow: inset 0 0 0 2px rgba(62, 207, 142, 0.42);
+}
+
+[data-theme="dark"] .touch-drag-preview {
+  border-color: #4ea774;
+  color: #dff7e8;
+  background: #214e35;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
 }
 
 [data-theme="dark"] .file-card:hover {

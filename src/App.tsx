@@ -6,6 +6,7 @@ import {
   useState,
   type DragEvent,
   type FormEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import type { Session } from "@supabase/supabase-js";
@@ -95,6 +96,25 @@ const emptyUsage: DriveUsage = {
   file_count: 0,
   folder_count: 0,
 };
+
+type DropTargetKey = number | "root" | null;
+
+interface TouchDragPreview {
+  x: number;
+  y: number;
+  label: string;
+  count: number;
+}
+
+interface TouchDragSession {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  timer: number | null;
+  active: boolean;
+  targets: DriveItem[];
+  source: HTMLElement;
+}
 
 const administratorEmail =
   import.meta.env.VITE_ADMIN_EMAIL?.trim() || "raimanncostigan@gmail.com";
@@ -522,6 +542,10 @@ function DriveApp({
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
   const [dragging, setDragging] = useState(false);
+  const [draggedIds, setDraggedIds] = useState<Set<number>>(new Set());
+  const [dropTarget, setDropTarget] = useState<DropTargetKey>(null);
+  const [touchDragPreview, setTouchDragPreview] =
+    useState<TouchDragPreview | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [modal, setModal] = useState<
     | { type: "folder" }
@@ -536,6 +560,10 @@ function DriveApp({
   const [toast, setToast] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const uploads = useRef(new Map<string, Upload>());
+  const dragTargets = useRef<DriveItem[]>([]);
+  const dropTargetRef = useRef<DropTargetKey>(null);
+  const touchDragSession = useRef<TouchDragSession | null>(null);
+  const moveInFlight = useRef(false);
   const speedSamples = useRef(
     new Map<string, { bytes: number; at: number; smoothed: number }>(),
   );
@@ -583,6 +611,21 @@ function DriveApp({
     const timer = window.setTimeout(() => setToast(null), 3600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    document.body.classList.toggle("touch-drag-active", Boolean(touchDragPreview));
+    return () => document.body.classList.remove("touch-drag-active");
+  }, [touchDragPreview]);
+
+  useEffect(
+    () => () => {
+      const session = touchDragSession.current;
+      if (session?.timer !== null && session?.timer !== undefined) {
+        window.clearTimeout(session.timer);
+      }
+    },
+    [],
+  );
 
   function chooseCategory(next: CategoryFilter) {
     setCategory(next);
@@ -764,6 +807,13 @@ function DriveApp({
   async function download(item: DriveItem) {
     try {
       const url = await signedDownloadUrl(item, session.access_token);
+      const usesCoarsePointer =
+        window.matchMedia?.("(pointer: coarse)").matches ||
+        window.navigator.maxTouchPoints > 0;
+      if (usesCoarsePointer) {
+        window.location.assign(url);
+        return;
+      }
       const anchor = document.createElement("a");
       anchor.href = url;
       anchor.download = item.name;
@@ -802,10 +852,274 @@ function DriveApp({
     }
   }
 
-  function handleDrop(event: DragEvent) {
+  function handleUploadDrop(event: DragEvent) {
     event.preventDefault();
     setDragging(false);
     void startFiles(event.dataTransfer.files);
+  }
+
+  function targetsForDrag(item: DriveItem) {
+    return selected.has(item.id) ? selectedItems : [item];
+  }
+
+  function setActiveDropTarget(target: DropTargetKey) {
+    dropTargetRef.current = target;
+    setDropTarget((current) => (current === target ? current : target));
+  }
+
+  function clearDragVisuals() {
+    dragTargets.current = [];
+    setDraggedIds(new Set());
+    setActiveDropTarget(null);
+    setTouchDragPreview(null);
+  }
+
+  async function moveDroppedItems(
+    targets: DriveItem[],
+    parentId: number | null,
+    targetLabel?: string,
+  ) {
+    if (!targets.length || moveInFlight.current) return;
+    if (targets.every((item) => item.parent_id === parentId)) {
+      setToast("这些内容已经在目标文件夹中");
+      return;
+    }
+
+    moveInFlight.current = true;
+    try {
+      const allFolders = await listAllFolders(userId);
+      setFolders(allFolders);
+
+      if (parentId !== null) {
+        const folderById = new Map(allFolders.map((folder) => [folder.id, folder]));
+        if (!folderById.has(parentId)) throw new Error("目标文件夹不存在");
+
+        const movedFolderIds = new Set(
+          targets
+            .filter((item) => item.kind === "folder")
+            .map((item) => item.id),
+        );
+        const visited = new Set<number>();
+        let cursor: number | null = parentId;
+        while (cursor !== null && !visited.has(cursor)) {
+          if (movedFolderIds.has(cursor)) {
+            throw new Error("不能把文件夹移动到自身或其子文件夹中");
+          }
+          visited.add(cursor);
+          cursor = folderById.get(cursor)?.parent_id ?? null;
+        }
+      }
+
+      await moveDriveItems(
+        targets.map((item) => item.id),
+        parentId,
+      );
+      setSelected(new Set());
+      setToast(
+        `已移动 ${targets.length} 项到${targetLabel ? `“${targetLabel}”` : "我的云盘"}`,
+      );
+      await refresh();
+    } catch (moveError) {
+      setToast(messageFrom(moveError));
+    } finally {
+      moveInFlight.current = false;
+    }
+  }
+
+  function beginDesktopDrag(event: DragEvent<HTMLElement>, item: DriveItem) {
+    const origin = event.target as HTMLElement;
+    if (
+      origin.closest(
+        "input, label, .row-actions, .card-actions, .card-check",
+      )
+    ) {
+      event.preventDefault();
+      return;
+    }
+
+    const targets = targetsForDrag(item);
+    dragTargets.current = targets;
+    setDraggedIds(new Set(targets.map((target) => target.id)));
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(
+      "application/x-xiaopan-items",
+      targets.map((target) => target.id).join(","),
+    );
+  }
+
+  function finishDesktopDrag() {
+    clearDragVisuals();
+  }
+
+  function handleMoveDragOver(
+    event: DragEvent<HTMLElement>,
+    target: Exclude<DropTargetKey, null>,
+  ) {
+    if (!dragTargets.current.length) return;
+    if (
+      target !== "root" &&
+      dragTargets.current.some(
+        (item) => item.kind === "folder" && item.id === target,
+      )
+    ) {
+      if (dropTargetRef.current === target) setActiveDropTarget(null);
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    setActiveDropTarget(target);
+  }
+
+  function handleMoveDragLeave(
+    event: DragEvent<HTMLElement>,
+    target: Exclude<DropTargetKey, null>,
+  ) {
+    const next = event.relatedTarget;
+    if (next instanceof Node && event.currentTarget.contains(next)) return;
+    if (dropTargetRef.current === target) setActiveDropTarget(null);
+  }
+
+  function handleMoveDrop(
+    event: DragEvent<HTMLElement>,
+    target: Exclude<DropTargetKey, null>,
+    targetLabel?: string,
+  ) {
+    if (!dragTargets.current.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const targets = [...dragTargets.current];
+    clearDragVisuals();
+    void moveDroppedItems(
+      targets,
+      target === "root" ? null : target,
+      targetLabel,
+    );
+  }
+
+  function cancelPendingTouchDrag() {
+    const session = touchDragSession.current;
+    if (session?.timer !== null && session?.timer !== undefined) {
+      window.clearTimeout(session.timer);
+    }
+    touchDragSession.current = null;
+  }
+
+  function beginTouchDrag(
+    event: ReactPointerEvent<HTMLElement>,
+    item: DriveItem,
+  ) {
+    if (event.pointerType !== "touch") return;
+    const origin = event.target as HTMLElement;
+    if (
+      origin.closest(
+        "input, label, .row-actions, .card-actions, .card-check",
+      )
+    ) {
+      return;
+    }
+
+    cancelPendingTouchDrag();
+    const targets = targetsForDrag(item);
+    const session: TouchDragSession = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      timer: null,
+      active: false,
+      targets,
+      source: event.currentTarget,
+    };
+    session.timer = window.setTimeout(() => {
+      if (touchDragSession.current !== session) return;
+      session.active = true;
+      session.timer = null;
+      try {
+        session.source.setPointerCapture(session.pointerId);
+      } catch {
+        // Pointer capture is an enhancement; the long-press drag still works without it.
+      }
+      dragTargets.current = targets;
+      setDraggedIds(new Set(targets.map((target) => target.id)));
+      setTouchDragPreview({
+        x: session.startX,
+        y: session.startY,
+        label: targets.length === 1 ? targets[0].name : `${targets.length} 项内容`,
+        count: targets.length,
+      });
+      window.navigator.vibrate?.(18);
+    }, 420);
+    touchDragSession.current = session;
+  }
+
+  function moveTouchDrag(event: ReactPointerEvent<HTMLElement>) {
+    const session = touchDragSession.current;
+    if (!session || event.pointerId !== session.pointerId) return;
+
+    const distance = Math.hypot(
+      event.clientX - session.startX,
+      event.clientY - session.startY,
+    );
+    if (!session.active) {
+      if (distance > 10) cancelPendingTouchDrag();
+      return;
+    }
+
+    event.preventDefault();
+    setTouchDragPreview((current) =>
+      current ? { ...current, x: event.clientX, y: event.clientY } : current,
+    );
+
+    const element = document.elementFromPoint(event.clientX, event.clientY);
+    const dropElement = element?.closest<HTMLElement>("[data-drop-folder-id]");
+    const value = dropElement?.dataset.dropFolderId;
+    let target: DropTargetKey = null;
+    if (value === "root") {
+      target = "root";
+    } else if (value && Number.isSafeInteger(Number(value))) {
+      const numericTarget = Number(value);
+      const movingItself = session.targets.some(
+        (item) => item.kind === "folder" && item.id === numericTarget,
+      );
+      if (!movingItself) target = numericTarget;
+    }
+    setActiveDropTarget(target);
+  }
+
+  function finishTouchDrag(event: ReactPointerEvent<HTMLElement>) {
+    const session = touchDragSession.current;
+    if (!session || event.pointerId !== session.pointerId) return;
+    if (session.timer !== null) window.clearTimeout(session.timer);
+    touchDragSession.current = null;
+
+    if (!session.active) return;
+    event.preventDefault();
+    const target = dropTargetRef.current;
+    const targets = [...session.targets];
+    const targetLabel =
+      target === "root"
+        ? undefined
+        : target === null
+          ? undefined
+          : items.find((item) => item.id === target)?.name ??
+            path.find((item) => item.id === target)?.name;
+    clearDragVisuals();
+    if (target === null) {
+      setToast("请把内容拖到文件夹或“我的云盘”上");
+      return;
+    }
+    void moveDroppedItems(
+      targets,
+      target === "root" ? null : target,
+      targetLabel,
+    );
+  }
+
+  function cancelTouchDrag(event: ReactPointerEvent<HTMLElement>) {
+    const session = touchDragSession.current;
+    if (!session || event.pointerId !== session.pointerId) return;
+    cancelPendingTouchDrag();
+    clearDragVisuals();
   }
 
   const navItems: {
@@ -829,8 +1143,10 @@ function DriveApp({
     <div
       className="drive-shell"
       onDragEnter={(event) => {
-        event.preventDefault();
-        setDragging(true);
+        if (Array.from(event.dataTransfer.types).includes("Files")) {
+          event.preventDefault();
+          setDragging(true);
+        }
       }}
     >
       {sidebarOpen && (
@@ -965,19 +1281,39 @@ function DriveApp({
             <div>
               <div className="breadcrumbs">
                 <button
+                  className={dropTarget === "root" ? "drop-target" : ""}
+                  data-drop-folder-id="root"
                   onClick={() => {
                     setPath([]);
                     setCategory("all");
                     setQuery("");
                     setSearch("");
                   }}
+                  onDragOver={(event) => handleMoveDragOver(event, "root")}
+                  onDragLeave={(event) => handleMoveDragLeave(event, "root")}
+                  onDrop={(event) =>
+                    handleMoveDrop(event, "root", "我的云盘")
+                  }
                 >
                   我的云盘
                 </button>
                 {path.map((folder, index) => (
                   <span key={folder.id}>
                     <ChevronRight size={14} />
-                    <button onClick={() => setPath(path.slice(0, index + 1))}>
+                    <button
+                      className={dropTarget === folder.id ? "drop-target" : ""}
+                      data-drop-folder-id={folder.id}
+                      onClick={() => setPath(path.slice(0, index + 1))}
+                      onDragOver={(event) =>
+                        handleMoveDragOver(event, folder.id)
+                      }
+                      onDragLeave={(event) =>
+                        handleMoveDragLeave(event, folder.id)
+                      }
+                      onDrop={(event) =>
+                        handleMoveDrop(event, folder.id, folder.name)
+                      }
+                    >
                       {folder.name}
                     </button>
                   </span>
@@ -998,22 +1334,26 @@ function DriveApp({
             </div>
             <div className="workspace-actions">
               <button
-                className="secondary-button"
+                className="secondary-button workspace-share-action"
                 onClick={() => onOpenShares(null)}
               >
                 <Share2 size={17} />
                 分享内容
               </button>
               <button
-                className="secondary-button"
+                className="secondary-button workspace-folder-action"
                 onClick={() => setModal({ type: "folder" })}
+                aria-label="新建文件夹"
+                title="新建文件夹"
               >
                 <FolderPlus size={17} />
                 新建文件夹
               </button>
               <button
-                className="primary-button"
+                className="primary-button workspace-upload-action"
                 onClick={() => fileInput.current?.click()}
+                aria-label="上传文件"
+                title="上传文件"
               >
                 <UploadCloud size={17} />
                 上传
@@ -1042,10 +1382,16 @@ function DriveApp({
                   <button onClick={() => setSelected(new Set())}>取消</button>
                 </>
               ) : (
-                <span className="toolbar-hint">
-                  <UploadCloud size={16} />
-                  可将文件拖到此处上传
-                </span>
+                <>
+                  <span className="toolbar-hint desktop-drag-hint">
+                    <UploadCloud size={16} />
+                    可将文件拖到此处上传
+                  </span>
+                  <span className="toolbar-hint mobile-drag-hint">
+                    <Move size={16} />
+                    长按文件并拖到文件夹即可移动
+                  </span>
+                </>
               )}
             </div>
             <div className="toolbar-right">
@@ -1160,6 +1506,29 @@ function DriveApp({
                     onRename={() => setModal({ type: "rename", item })}
                     onMove={() => void openMoveDialog([item])}
                     onDelete={() => setModal({ type: "delete", items: [item] })}
+                    dragging={draggedIds.has(item.id)}
+                    dropTarget={item.kind === "folder" && dropTarget === item.id}
+                    onDragStart={(event) => beginDesktopDrag(event, item)}
+                    onDragEnd={finishDesktopDrag}
+                    onDragOver={(event) =>
+                      item.kind === "folder"
+                        ? handleMoveDragOver(event, item.id)
+                        : undefined
+                    }
+                    onDragLeave={(event) =>
+                      item.kind === "folder"
+                        ? handleMoveDragLeave(event, item.id)
+                        : undefined
+                    }
+                    onDrop={(event) =>
+                      item.kind === "folder"
+                        ? handleMoveDrop(event, item.id, item.name)
+                        : undefined
+                    }
+                    onPointerDown={(event) => beginTouchDrag(event, item)}
+                    onPointerMove={moveTouchDrag}
+                    onPointerUp={finishTouchDrag}
+                    onPointerCancel={cancelTouchDrag}
                   />
                 ))}
               </div>
@@ -1168,7 +1537,59 @@ function DriveApp({
                 {visibleItems.map((item) => (
                   <article
                     key={item.id}
-                    className={`file-card ${selected.has(item.id) ? "selected" : ""}`}
+                    className={[
+                      "file-card",
+                      "draggable-item",
+                      selected.has(item.id) ? "selected" : "",
+                      draggedIds.has(item.id) ? "is-dragging" : "",
+                      item.kind === "folder" && dropTarget === item.id
+                        ? "drop-target"
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    draggable
+                    data-drop-folder-id={
+                      item.kind === "folder" ? item.id : undefined
+                    }
+                    onDragStart={(event) => beginDesktopDrag(event, item)}
+                    onDragEnd={finishDesktopDrag}
+                    onDragOver={(event) => {
+                      if (item.kind === "folder") {
+                        handleMoveDragOver(event, item.id);
+                      }
+                    }}
+                    onDragLeave={(event) => {
+                      if (item.kind === "folder") {
+                        handleMoveDragLeave(event, item.id);
+                      }
+                    }}
+                    onDrop={(event) => {
+                      if (item.kind === "folder") {
+                        handleMoveDrop(event, item.id, item.name);
+                      }
+                    }}
+                    onPointerDown={(event) => beginTouchDrag(event, item)}
+                    onPointerMove={moveTouchDrag}
+                    onPointerUp={finishTouchDrag}
+                    onPointerCancel={cancelTouchDrag}
+                    onContextMenu={(event) => {
+                      if (touchDragSession.current?.active) event.preventDefault();
+                    }}
+                    onClick={(event) => {
+                      if (
+                        !(window.matchMedia?.("(pointer: coarse)").matches ||
+                          window.navigator.maxTouchPoints > 0) ||
+                        (event.target as HTMLElement).closest(
+                          "button, input, label, .card-actions",
+                        )
+                      ) {
+                        return;
+                      }
+                      item.kind === "folder"
+                        ? openFolder(item)
+                        : void download(item);
+                    }}
                     onDoubleClick={() =>
                       item.kind === "folder" ? openFolder(item) : void download(item)
                     }
@@ -1199,7 +1620,12 @@ function DriveApp({
                           <button title="分享" onClick={() => onOpenShares(item)}>
                             <Share2 size={15} />
                           </button>
-                          <button title="下载" onClick={() => void download(item)}>
+                          <button
+                            className="download-action"
+                            title="下载"
+                            aria-label={`下载 ${item.name}`}
+                            onClick={() => void download(item)}
+                          >
                             <Download size={15} />
                           </button>
                         </>
@@ -1223,13 +1649,30 @@ function DriveApp({
           onDragLeave={(event) => {
             if (event.currentTarget === event.target) setDragging(false);
           }}
-          onDrop={handleDrop}
+          onDrop={handleUploadDrop}
         >
           <div>
             <UploadCloud size={38} />
             <strong>松开即可上传</strong>
             <span>支持大文件分片与断点续传</span>
           </div>
+        </div>
+      )}
+
+      {touchDragPreview && (
+        <div
+          className="touch-drag-preview"
+          style={{
+            left: touchDragPreview.x,
+            top: touchDragPreview.y,
+          }}
+          aria-hidden="true"
+        >
+          <Move size={17} />
+          <span>{touchDragPreview.label}</span>
+          {touchDragPreview.count > 1 && (
+            <strong>{touchDragPreview.count}</strong>
+          )}
         </div>
       )}
 
@@ -1331,13 +1774,61 @@ function FileRow(props: {
   onRename: () => void;
   onMove: () => void;
   onDelete: () => void;
+  dragging: boolean;
+  dropTarget: boolean;
+  onDragStart: (event: DragEvent<HTMLDivElement>) => void;
+  onDragEnd: () => void;
+  onDragOver: (event: DragEvent<HTMLDivElement>) => void | undefined;
+  onDragLeave: (event: DragEvent<HTMLDivElement>) => void | undefined;
+  onDrop: (event: DragEvent<HTMLDivElement>) => void | undefined;
+  onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerCancel: (event: ReactPointerEvent<HTMLDivElement>) => void;
 }) {
   return (
-    <div className={`file-row ${props.checked ? "selected" : ""}`}>
+    <div
+      className={[
+        "file-row",
+        "draggable-item",
+        props.checked ? "selected" : "",
+        props.dragging ? "is-dragging" : "",
+        props.dropTarget ? "drop-target" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      draggable
+      data-drop-folder-id={
+        props.item.kind === "folder" ? props.item.id : undefined
+      }
+      onDragStart={props.onDragStart}
+      onDragEnd={props.onDragEnd}
+      onDragOver={props.onDragOver}
+      onDragLeave={props.onDragLeave}
+      onDrop={props.onDrop}
+      onPointerDown={props.onPointerDown}
+      onPointerMove={props.onPointerMove}
+      onPointerUp={props.onPointerUp}
+      onPointerCancel={props.onPointerCancel}
+      onContextMenu={(event) => {
+        if (props.dragging) event.preventDefault();
+      }}
+    >
       <label>
         <input type="checkbox" checked={props.checked} onChange={props.onToggle} />
       </label>
-      <button className="file-name" onDoubleClick={props.onOpen}>
+      <button
+        className="file-name"
+        onClick={() => {
+          if (
+            window.matchMedia?.("(pointer: coarse)").matches ||
+            window.navigator.maxTouchPoints > 0
+          ) {
+            props.onOpen();
+          }
+        }}
+        onDoubleClick={props.onOpen}
+      >
         <span className={`file-icon ${props.item.kind}`}>
           {fileIcon(props.item)}
         </span>
@@ -1353,7 +1844,12 @@ function FileRow(props: {
             <button title="分享" onClick={props.onShare}>
               <Share2 size={16} />
             </button>
-            <button title="下载" onClick={props.onDownload}>
+            <button
+              className="download-action"
+              title="下载"
+              aria-label={`下载 ${props.item.name}`}
+              onClick={props.onDownload}
+            >
               <Download size={16} />
             </button>
           </>
