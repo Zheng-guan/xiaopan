@@ -10,14 +10,14 @@ Last updated: 2026-07-29 (Asia/Shanghai)
 | Production site | `https://xiaopan-drive.netlify.app` |
 | Netlify site | `xiaopan-drive` (`5fe119cb-b071-4efd-9414-48ca9de48890`) |
 | Source branch | `main` |
-| Current release scope | R2 multipart storage migration prepared; deployment is waiting for R2 credentials |
-| Deployment method | Supabase migration applied; local production build and Netlify function bundles verified |
+| Current release scope | Cloudflare R2 multipart storage is live |
+| Deployment method | Netlify production deploy `6a6a202f0418d14a52dc5942` |
 
-The working tree routes every new file through Cloudflare R2 while retaining
+The production site routes every new file through Cloudflare R2 while retaining
 read/delete compatibility for existing Supabase Storage files. Supabase migration
 `add_r2_storage_provider` is applied in production. The frontend production build
-and the new Netlify function bundles passed on 2026-07-29. Do not deploy until
-the four R2 server variables are configured.
+and all four Netlify Functions passed on 2026-07-29. The `xiaopan` bucket CORS
+allows the production origin and local Vite development and exposes `ETag`.
 
 ## Delivered capabilities
 
@@ -97,10 +97,8 @@ After deployment, verify:
 
 ## Current follow-up items
 
-- Create an R2 S3 API token with Object Read & Write access limited to `xiaopan`, then set the four R2 variables in Netlify.
-- Cloudflare CORS automation returned error `10000 Authentication error`. Configure the rule in `README.zh-CN.md` manually or reconnect Cloudflare with R2 write permission.
-- Update Netlify `VITE_MAX_FILE_SIZE_BYTES`; the existing production value may still display the old 50 MB client-side limit.
-- After credentials and CORS are ready, commit, deploy, and smoke-test an 80 MB `.exe`.
+- Rotate both Cloudflare tokens because their values were pasted into a chat, then update the two secret Netlify variables.
+- Smoke-test an 80 MB `.exe` upload, pause/resume, private download, public-share download, and deletion with a real signed-in account.
 - `npm ci` reported 16 dependency advisories (2 low, 14 high) on 2026-07-28. They did not block the production build. Review `npm audit` and upgrade deliberately in a separate change; do not apply `npm audit fix --force` without testing.
 - The client quota and per-file limit are display/preflight checks; R2 account billing and its 5 TiB multipart object limit are authoritative.
 - Keep the live Supabase Auth redirect URLs aligned with the Netlify production URL and any preview domains used for testing.
