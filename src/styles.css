@@ -427,9 +427,39 @@ body:has(.drive-shell) .topbar-actions {
 }
 
 .auth-form label > span,
+.captcha-field > span,
 .modal-field > span {
   font-size: 13px;
   font-weight: 600;
+}
+
+.captcha-field {
+  display: grid;
+  gap: 8px;
+}
+
+.turnstile-wrap,
+.turnstile-widget {
+  width: 100%;
+}
+
+.turnstile-widget {
+  min-height: 65px;
+}
+
+.turnstile-error,
+.captcha-unconfigured {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.captcha-unconfigured {
+  padding: 11px 12px;
+  border: 1px solid #efcaca;
+  border-radius: 10px;
+  background: #fff4f3;
 }
 
 .auth-form input,
@@ -453,6 +483,22 @@ body:has(.drive-shell) .topbar-actions {
   box-shadow: 0 0 0 4px rgba(52, 118, 91, 0.1);
 }
 
+.auth-form .verification-code-input {
+  height: 56px;
+  text-align: center;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.38em;
+  padding-left: calc(14px + 0.38em);
+}
+
+.field-help {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.55;
+}
+
 .auth-submit {
   height: 49px;
   margin-top: 5px;
@@ -469,6 +515,25 @@ body:has(.drive-shell) .topbar-actions {
   border: 0;
   color: var(--green);
   background: transparent;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.verification-actions {
+  margin-top: 22px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 16px;
+}
+
+.verification-actions button {
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  color: var(--green);
+  background: transparent;
+  font-size: 13px;
   font-weight: 700;
   cursor: pointer;
 }
@@ -3391,6 +3456,11 @@ body.touch-drag-active {
 /* Dark theme */
 [data-theme="dark"] .auth-panel {
   background: #181b18;
+}
+
+[data-theme="dark"] .captcha-unconfigured {
+  border-color: #68433f;
+  background: #2b201f;
 }
 
 [data-theme="dark"] .secondary-button,

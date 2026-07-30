@@ -20,7 +20,8 @@
 
 ## 主要功能
 
-- 邮箱密码注册、登录、退出和会话自动续期
+- 先通过 Cloudflare Turnstile 人机验证获取 8 位邮箱验证码，验证后再设置登录密码
+- 密码登录、退出和会话自动续期
 - 每位用户独立的私有文件与文件夹空间
 - 文件夹导航、列表/网格视图、搜索、排序和容量统计
 - 拖拽上传和多文件上传
@@ -166,14 +167,48 @@ npx supabase functions deploy public-share --no-verify-jwt
 
 匿名用户不能直接读取 `shares` 表。函数只返回仍然有效的分享内容，不会公开用户邮箱、Storage 路径或服务端密钥。
 
-### 3. 配置 Auth 地址
+### 3. 配置注册验证码
+
+在 **Authentication → Sign In / Providers → Email** 中开启 **Confirm email（确认邮箱）**。开启后，新账户必须先验证邮箱，不能在未验证时直接获得登录会话。
+
+然后进入 **Authentication → Email Templates → Confirm signup**，把确认注册邮件改为只包含验证码的模板。不要放入 `{{ .ConfirmationURL }}`：
+
+```html
+<h2>小盘注册验证码</h2>
+<p>请输入以下 8 位验证码完成注册：</p>
+<p style="font-size: 28px; font-weight: 700; letter-spacing: 6px;">
+  {{ .Token }}
+</p>
+<p>验证码将在短时间后失效，请勿转发。</p>
+```
+
+第一步只收集称呼、邮箱和人机验证结果。为了让 Supabase 发起注册验证，前端会在内存中生成高强度随机的临时密码；`verifyOtp` 验证成功后立即替换成用户在第二步设置的密码。用户设置的密码不会写入 Web Storage，项目也不自建验证码表。
+
+> **Supabase 免费版注意事项：**2026 年 6 月 3 日及以后创建的新 Free 项目，如果使用 Supabase 默认 SMTP，就不能自定义身份验证邮件模板。必须先在 **Authentication → Emails → SMTP Settings** 中配置自定义 SMTP，再保存上面的纯验证码模板。SMTP 凭据只能保存在服务端配置中，不能放入浏览器环境变量。
+
+本地 Supabase 开发环境已经在 `supabase/config.toml` 中开启邮箱确认，并使用 `supabase/templates/confirmation.html`。
+
+官方资料：
+
+- [Supabase 邮件模板](https://supabase.com/docs/guides/auth/auth-email-templates)
+- [免费版邮件模板自定义变更](https://supabase.com/changelog/46599-changes-to-email-template-customisation-on-free-tier)
+
+### 4. 配置 Cloudflare Turnstile
+
+1. 在 Cloudflare 创建一个 **Managed（托管）** Turnstile 组件，把正式网站域名和本地测试所需的 `localhost` 加入允许列表。
+2. 将公开的 **Site key** 配置为 `VITE_TURNSTILE_SITE_KEY`。
+3. 进入 Supabase 的 **Authentication → Bot and Abuse Protection**，开启 CAPTCHA，选择 **Turnstile**，填入对应的 Cloudflare **Secret key**。
+
+Site key 可以放在浏览器环境变量中；Secret key 只能保存在 Supabase Auth 设置中，绝不能使用 `VITE_` 前缀。
+
+### 5. 配置 Auth 地址
 
 在 **Authentication → URL Configuration** 中加入：
 
 - 本地开发：`http://localhost:5173/**`
 - 正式网站：`https://xiaopan-drive.netlify.app/**`
 
-### 4. 配置管理员
+### 6. 配置管理员
 
 将规范化的小写管理员邮箱添加到 `admin_users`，再把同一邮箱配置到 `VITE_ADMIN_EMAIL`。
 

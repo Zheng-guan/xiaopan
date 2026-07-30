@@ -20,7 +20,8 @@ Files are uploaded directly from the browser to Cloudflare R2 with server-signed
 
 ## Features
 
-- Email/password registration, sign-in, sign-out, and session refresh
+- Two-step registration with Cloudflare Turnstile, an eight-digit email code, and password setup after verification
+- Password sign-in, sign-out, and session refresh
 - Private files and folders for every user
 - Folder navigation, list/grid views, search, sorting, and storage statistics
 - Drag-and-drop and multi-file uploads
@@ -166,14 +167,48 @@ npx supabase functions deploy public-share --no-verify-jwt
 
 Anonymous users do not have direct access to the `shares` table. The function only returns active share data and never exposes owner email addresses, Storage paths, or service credentials.
 
-### 3. Configure authentication URLs
+### 3. Configure registration verification codes
+
+In **Authentication → Sign In / Providers → Email**, enable **Confirm email**. Registration must not be allowed to create an authenticated session before the email is verified.
+
+Then open **Authentication → Email Templates → Confirm signup** and use a code-only template. Do not include `{{ .ConfirmationURL }}`:
+
+```html
+<h2>Xiaopan registration code</h2>
+<p>Enter this eight-digit code to finish creating your account:</p>
+<p style="font-size: 28px; font-weight: 700; letter-spacing: 6px;">
+  {{ .Token }}
+</p>
+<p>This code expires shortly. Do not share it.</p>
+```
+
+The first step asks only for a display name, email address, and CAPTCHA. Supabase receives a cryptographically random bootstrap password so it can issue the signup challenge. After `verifyOtp` succeeds, the frontend immediately replaces that bootstrap value with the password chosen by the user. The chosen password is never stored in Web Storage, and the project does not implement a custom OTP table.
+
+> **Supabase Free plan note:** For new Free projects created on or after June 3, 2026, Supabase's default SMTP does not allow custom authentication email templates. Configure a custom SMTP provider in **Authentication → Emails → SMTP Settings** before saving the code-only template. Never put SMTP credentials in browser environment variables.
+
+For local Supabase development, `supabase/config.toml` enables email confirmation and uses `supabase/templates/confirmation.html`.
+
+Official references:
+
+- [Supabase email templates](https://supabase.com/docs/guides/auth/auth-email-templates)
+- [Changes to email template customization on Free tier](https://supabase.com/changelog/46599-changes-to-email-template-customisation-on-free-tier)
+
+### 4. Configure Cloudflare Turnstile
+
+1. Create a **Managed** Turnstile widget in Cloudflare and allow the production hostname plus `localhost` for local testing.
+2. Put the public **Site key** in `VITE_TURNSTILE_SITE_KEY`.
+3. In Supabase, open **Authentication → Bot and Abuse Protection**, enable CAPTCHA protection, select **Turnstile**, and enter the matching Cloudflare **Secret key**.
+
+The site key is browser-safe. The secret key must exist only in Supabase Auth settings and must never use a `VITE_` variable.
+
+### 5. Configure authentication URLs
 
 In **Authentication → URL Configuration**, add:
 
 - Local development: `http://localhost:5173/**`
 - Production: `https://xiaopan-drive.netlify.app/**`
 
-### 4. Configure the administrator
+### 6. Configure the administrator
 
 Add the normalized administrator email to `admin_users`, then set the same value in `VITE_ADMIN_EMAIL`.
 

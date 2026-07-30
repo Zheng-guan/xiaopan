@@ -58,6 +58,7 @@ import PublicShareView from "./PublicShareView";
 import QuickTextCenter from "./QuickTextCenter";
 import ShareCenter from "./ShareCenter";
 import ThemeToggle from "./ThemeToggle";
+import TurnstileWidget from "./TurnstileWidget";
 import { checkAdmin } from "./lib/admin";
 import {
   createFolder,
@@ -125,6 +126,8 @@ interface TouchDragSession {
 
 const administratorEmail =
   import.meta.env.VITE_ADMIN_EMAIL?.trim() || "raimanncostigan@gmail.com";
+const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY?.trim() ?? "";
+const signupCodeLength = 8;
 
 function publicShareTokenFromPath() {
   return window.location.pathname.match(
@@ -138,6 +141,59 @@ function messageFrom(error: unknown) {
     return String(error.message);
   }
   return "操作失败，请稍后重试";
+}
+
+function authMessageFrom(error: unknown, action: "submit" | "verify" | "resend") {
+  const message = messageFrom(error);
+  const normalized = message.toLocaleLowerCase();
+
+  if (
+    normalized.includes("token has expired") ||
+    normalized.includes("token is invalid") ||
+    normalized.includes("invalid otp") ||
+    normalized.includes("otp expired")
+  ) {
+    return "验证码错误或已过期，请检查后重试，或重新发送验证码。";
+  }
+  if (
+    normalized.includes("rate limit") ||
+    normalized.includes("too many requests") ||
+    normalized.includes("email rate limit")
+  ) {
+    return action === "resend"
+      ? "发送太频繁，请稍后再重新发送。"
+      : "操作太频繁，请稍后再试。";
+  }
+  if (
+    normalized.includes("already registered") ||
+    normalized.includes("already been registered") ||
+    normalized.includes("user already exists")
+  ) {
+    return "该邮箱无法完成注册，请返回登录或稍后重试。";
+  }
+  if (normalized.includes("signup") && normalized.includes("disabled")) {
+    return "当前暂未开放注册，请联系管理员。";
+  }
+  if (
+    normalized.includes("captcha") ||
+    normalized.includes("challenge verification")
+  ) {
+    return "人机验证未通过或已过期，请重新完成验证后再试。";
+  }
+  if (action === "verify") {
+    return `验证码验证失败：${message}`;
+  }
+  return message;
+}
+
+function temporarySignupPassword() {
+  const bytes = new Uint8Array(32);
+  window.crypto.getRandomValues(bytes);
+  const randomPart = Array.from(
+    bytes,
+    (value) => value.toString(36).padStart(2, "0"),
+  ).join("");
+  return `Tmp-${randomPart}-Aa1!`;
 }
 
 function fileIcon(item: DriveItem, size = 20) {
@@ -296,12 +352,64 @@ function AuthenticatedView({ session }: { session: Session }) {
 
 function AuthView() {
   const [mode, setMode] = useState<"signin" | "signup" | "admin">("signin");
+  const [signupStep, setSignupStep] = useState<"details" | "verification">("details");
+  const [pendingSignupEmail, setPendingSignupEmail] = useState("");
+  const [verificationCode, setVerificationCode] = useState("");
+  const [resendSeconds, setResendSeconds] = useState(0);
+  const [captchaToken, setCaptchaToken] = useState("");
+  const [captchaResetKey, setCaptchaResetKey] = useState(0);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (resendSeconds <= 0) return;
+    const timer = window.setInterval(() => {
+      setResendSeconds((seconds) => Math.max(0, seconds - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [resendSeconds]);
+
+  function clearSignupVerification() {
+    setSignupStep("details");
+    setPendingSignupEmail("");
+    setVerificationCode("");
+    setResendSeconds(0);
+    setCaptchaToken("");
+    setCaptchaResetKey((value) => value + 1);
+    setPassword("");
+  }
+
+  function changeMode(nextMode: "signin" | "signup" | "admin") {
+    setMode(nextMode);
+    clearSignupVerification();
+    setError(null);
+    setNotice(null);
+  }
+
+  async function resendSignupCode() {
+    if (!pendingSignupEmail || busy || resendSeconds > 0) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const { error: resendError } = await supabase.auth.resend({
+        type: "signup",
+        email: pendingSignupEmail,
+      });
+      if (resendError) throw resendError;
+      setVerificationCode("");
+      setResendSeconds(60);
+      setNotice(`新的 ${signupCodeLength} 位验证码已发送，请查看邮箱。`);
+    } catch (resendError) {
+      setError(authMessageFrom(resendError, "resend"));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -326,27 +434,83 @@ function AuthView() {
       } else if (mode === "signin") {
         window.sessionStorage.removeItem("xiaopan:open-admin");
         const { error: signInError } = await supabase.auth.signInWithPassword({
-          email,
+          email: email.trim(),
           password,
         });
         if (signInError) throw signInError;
-      } else {
-        const { data, error: signUpError } = await supabase.auth.signUp({
-          email,
+      } else if (signupStep === "verification") {
+        if (verificationCode.length !== signupCodeLength) {
+          setError(`请输入邮件中的 ${signupCodeLength} 位验证码。`);
+          return;
+        }
+        if (password.length < 6) {
+          setError("密码至少需要 6 位。");
+          return;
+        }
+        const {
+          data: verificationData,
+          error: verificationError,
+        } = await supabase.auth.verifyOtp({
+          email: pendingSignupEmail,
+          token: verificationCode,
+          type: "signup",
+        });
+        if (verificationError) throw verificationError;
+        if (!verificationData.session) {
+          throw new Error("验证码已通过，但未能建立登录会话，请重新登录后再试。");
+        }
+        const { error: passwordError } = await supabase.auth.updateUser({
           password,
+          data: { display_name: name.trim() },
+        });
+        if (passwordError) {
+          await supabase.auth.signOut();
+          throw new Error(`验证码已通过，但设置密码失败：${passwordError.message}`);
+        }
+      } else {
+        if (!turnstileSiteKey) {
+          setError("人机验证尚未配置，请联系管理员。");
+          return;
+        }
+        if (!captchaToken) {
+          setError("请先完成人机验证。");
+          return;
+        }
+        const { data, error: signUpError } = await supabase.auth.signUp({
+          email: email.trim(),
+          password: temporarySignupPassword(),
           options: {
             data: { display_name: name.trim() },
-            emailRedirectTo: window.location.origin,
+            captchaToken,
           },
         });
+        setCaptchaToken("");
+        setCaptchaResetKey((value) => value + 1);
         if (signUpError) throw signUpError;
-        if (!data.session) {
-          setNotice("注册成功！请查看邮箱并完成验证，然后返回登录。");
-          setMode("signin");
+        if (data.session) {
+          await supabase.auth.signOut();
+          throw new Error(
+            "Supabase 尚未开启邮箱确认。请先启用邮箱确认，确保新用户必须输入验证码。",
+          );
         }
+        setPendingSignupEmail(email.trim());
+        setSignupStep("verification");
+        setVerificationCode("");
+        setPassword("");
+        setResendSeconds(60);
+        setNotice(
+          `${signupCodeLength} 位验证码已发送，请在下方输入并设置登录密码。`,
+        );
       }
     } catch (submitError) {
-      setError(messageFrom(submitError));
+      setError(
+        authMessageFrom(
+          submitError,
+          mode === "signup" && signupStep === "verification"
+            ? "verify"
+            : "submit",
+        ),
+      );
     } finally {
       setBusy(false);
     }
@@ -401,14 +565,18 @@ function AuthView() {
               {mode === "signin"
                 ? "登录你的云空间"
                 : mode === "signup"
-                  ? "创建个人云空间"
+                  ? signupStep === "verification"
+                    ? "验证邮箱并设置密码"
+                    : "创建个人云空间"
                   : "管理员密码登录"}
             </h2>
             <p>
               {mode === "signin"
                 ? "继续整理、上传和下载你的文件。"
                 : mode === "signup"
-                  ? "免费开始，文件默认仅你自己可见。"
+                  ? signupStep === "verification"
+                    ? `验证码已发送至 ${pendingSignupEmail}，验证后即可设置密码。`
+                    : "填写名称和邮箱，完成人机验证后获取验证码。"
                   : "只需输入管理员密码，即可进入安全管理后台。"}
             </p>
           </header>
@@ -433,7 +601,7 @@ function AuthView() {
           )}
 
           <form onSubmit={submit} className="auth-form">
-            {mode === "signup" && (
+            {mode === "signup" && signupStep === "details" && (
               <label>
                 <span>你的称呼</span>
                 <input
@@ -445,7 +613,7 @@ function AuthView() {
                 />
               </label>
             )}
-            {mode !== "admin" && (
+            {mode !== "admin" && signupStep === "details" && (
               <label>
                 <span>邮箱</span>
                 <input
@@ -458,32 +626,118 @@ function AuthView() {
                 />
               </label>
             )}
-            <label>
-              <span>{mode === "admin" ? "管理员密码" : "密码"}</span>
-              <input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder={mode === "admin" ? "请输入管理员密码" : "至少 6 位"}
-                minLength={6}
-                autoComplete={mode === "signup" ? "new-password" : "current-password"}
-                required
-              />
-            </label>
-            <button className="primary-button auth-submit" disabled={busy}>
+            {mode === "signup" && signupStep === "details" && (
+              <div className="captcha-field">
+                <span>人机验证</span>
+                {turnstileSiteKey ? (
+                  <TurnstileWidget
+                    siteKey={turnstileSiteKey}
+                    resetKey={captchaResetKey}
+                    onToken={setCaptchaToken}
+                  />
+                ) : (
+                  <p className="captcha-unconfigured">
+                    尚未配置 Turnstile 站点密钥，暂时无法注册。
+                  </p>
+                )}
+              </div>
+            )}
+            {mode === "signup" && signupStep === "verification" && (
+              <label>
+                <span>{signupCodeLength} 位验证码</span>
+                <input
+                  className="verification-code-input"
+                  value={verificationCode}
+                  onChange={(event) =>
+                    setVerificationCode(
+                      event.target.value
+                        .replace(/\D/g, "")
+                        .slice(0, signupCodeLength),
+                    )
+                  }
+                  placeholder={"0".repeat(signupCodeLength)}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  aria-describedby="verification-code-help"
+                  maxLength={signupCodeLength}
+                  autoFocus
+                  required
+                />
+                <small id="verification-code-help" className="field-help">
+                  邮件中只有验证码，不需要点击任何验证链接。
+                </small>
+              </label>
+            )}
+            {(mode !== "signup" || signupStep === "verification") && (
+              <label>
+                <span>{mode === "admin" ? "管理员密码" : "密码"}</span>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder={
+                    mode === "admin"
+                      ? "请输入管理员密码"
+                      : mode === "signup"
+                        ? "设置至少 6 位的登录密码"
+                        : "请输入密码"
+                  }
+                  minLength={6}
+                  autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                  required
+                />
+              </label>
+            )}
+            <button
+              className="primary-button auth-submit"
+              disabled={
+                busy ||
+                (mode === "signup" &&
+                  signupStep === "details" &&
+                  (!turnstileSiteKey || !captchaToken))
+              }
+            >
               {busy && <LoaderCircle className="spin" size={17} />}
               {mode === "signin"
                 ? "进入云空间"
                 : mode === "signup"
-                  ? "创建账户"
+                  ? signupStep === "verification"
+                    ? "验证并完成注册"
+                    : "获取验证码"
                   : "进入管理后台"}
             </button>
           </form>
 
           {mode === "admin" ? (
             <p className="auth-switch">
-              <button type="button" onClick={() => setMode("signin")}>返回普通用户登录</button>
+              <button type="button" onClick={() => changeMode("signin")}>返回普通用户登录</button>
             </p>
+          ) : mode === "signup" && signupStep === "verification" ? (
+            <div className="verification-actions">
+              <button
+                type="button"
+                onClick={() => void resendSignupCode()}
+                disabled={busy || resendSeconds > 0}
+              >
+                {resendSeconds > 0
+                  ? `${resendSeconds} 秒后可重新发送`
+                  : "重新发送验证码"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  clearSignupVerification();
+                  setError(null);
+                  setNotice(null);
+                }}
+                disabled={busy}
+              >
+                修改邮箱
+              </button>
+              <button type="button" onClick={() => changeMode("signin")} disabled={busy}>
+                返回登录
+              </button>
+            </div>
           ) : (
             <>
               <p className="auth-switch">
@@ -491,9 +745,7 @@ function AuthView() {
                 <button
                   type="button"
                   onClick={() => {
-                    setMode(mode === "signin" ? "signup" : "signin");
-                    setError(null);
-                    setNotice(null);
+                    changeMode(mode === "signin" ? "signup" : "signin");
                   }}
                 >
                   {mode === "signin" ? "立即注册" : "返回登录"}
@@ -503,9 +755,7 @@ function AuthView() {
                 type="button"
                 className="admin-entry-button"
                 onClick={() => {
-                  setMode("admin");
-                  setError(null);
-                  setNotice(null);
+                  changeMode("admin");
                 }}
               >
                 <ShieldCheck size={16} />
