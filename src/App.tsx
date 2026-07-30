@@ -187,7 +187,9 @@ function authMessageFrom(error: unknown, action: "submit" | "verify" | "resend")
 }
 
 function temporarySignupPassword() {
-  const bytes = new Uint8Array(32);
+  // bcrypt, used by Supabase Auth, only accepts passwords up to 72 bytes.
+  // Keep the generated bootstrap password comfortably below that limit.
+  const bytes = new Uint8Array(24);
   window.crypto.getRandomValues(bytes);
   const randomPart = Array.from(
     bytes,
@@ -364,6 +366,7 @@ function AuthView() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const captchaRequired = mode !== "signup" || signupStep === "details";
 
   useEffect(() => {
     if (resendSeconds <= 0) return;
@@ -421,11 +424,20 @@ function AuthView() {
     setError(null);
     setNotice(null);
     try {
+      if (captchaRequired && !turnstileSiteKey) {
+        setError("人机验证尚未配置，请联系管理员。");
+        return;
+      }
+      if (captchaRequired && !captchaToken) {
+        setError("请先完成人机验证。");
+        return;
+      }
       if (mode === "admin") {
         window.sessionStorage.setItem("xiaopan:open-admin", "1");
         const { error: adminSignInError } = await supabase.auth.signInWithPassword({
           email: administratorEmail,
           password,
+          options: { captchaToken },
         });
         if (adminSignInError) {
           window.sessionStorage.removeItem("xiaopan:open-admin");
@@ -436,6 +448,7 @@ function AuthView() {
         const { error: signInError } = await supabase.auth.signInWithPassword({
           email: email.trim(),
           password,
+          options: { captchaToken },
         });
         if (signInError) throw signInError;
       } else if (signupStep === "verification") {
@@ -468,14 +481,6 @@ function AuthView() {
           throw new Error(`验证码已通过，但设置密码失败：${passwordError.message}`);
         }
       } else {
-        if (!turnstileSiteKey) {
-          setError("人机验证尚未配置，请联系管理员。");
-          return;
-        }
-        if (!captchaToken) {
-          setError("请先完成人机验证。");
-          return;
-        }
         const { data, error: signUpError } = await supabase.auth.signUp({
           email: email.trim(),
           password: temporarySignupPassword(),
@@ -512,6 +517,10 @@ function AuthView() {
         ),
       );
     } finally {
+      if (captchaRequired) {
+        setCaptchaToken("");
+        setCaptchaResetKey((value) => value + 1);
+      }
       setBusy(false);
     }
   }
@@ -626,7 +635,7 @@ function AuthView() {
                 />
               </label>
             )}
-            {mode === "signup" && signupStep === "details" && (
+            {captchaRequired && (
               <div className="captcha-field">
                 <span>人机验证</span>
                 {turnstileSiteKey ? (
@@ -692,9 +701,7 @@ function AuthView() {
               className="primary-button auth-submit"
               disabled={
                 busy ||
-                (mode === "signup" &&
-                  signupStep === "details" &&
-                  (!turnstileSiteKey || !captchaToken))
+                (captchaRequired && (!turnstileSiteKey || !captchaToken))
               }
             >
               {busy && <LoaderCircle className="spin" size={17} />}
