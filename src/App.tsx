@@ -480,6 +480,10 @@ function AuthView() {
           await supabase.auth.signOut();
           throw new Error(`验证码已通过，但设置密码失败：${passwordError.message}`);
         }
+        // verifyOtp has established and persisted the session. Reloading the root
+        // route makes the transition to the user's drive immediate and explicit.
+        window.location.replace("/");
+        return;
       } else {
         const { data, error: signUpError } = await supabase.auth.signUp({
           email: email.trim(),
@@ -492,6 +496,9 @@ function AuthView() {
         setCaptchaToken("");
         setCaptchaResetKey((value) => value + 1);
         if (signUpError) throw signUpError;
+        if (!data.user || data.user.identities?.length === 0) {
+          throw new Error("该邮箱已注册，请直接登录。");
+        }
         if (data.session) {
           await supabase.auth.signOut();
           throw new Error(
@@ -503,9 +510,6 @@ function AuthView() {
         setVerificationCode("");
         setPassword("");
         setResendSeconds(60);
-        setNotice(
-          `${signupCodeLength} 位验证码已发送，请在下方输入并设置登录密码。`,
-        );
       }
     } catch (submitError) {
       setError(
@@ -667,14 +671,10 @@ function AuthView() {
                   placeholder={"0".repeat(signupCodeLength)}
                   inputMode="numeric"
                   autoComplete="one-time-code"
-                  aria-describedby="verification-code-help"
                   maxLength={signupCodeLength}
                   autoFocus
                   required
                 />
-                <small id="verification-code-help" className="field-help">
-                  邮件中只有验证码，不需要点击任何验证链接。
-                </small>
               </label>
             )}
             {(mode !== "signup" || signupStep === "verification") && (

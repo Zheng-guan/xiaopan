@@ -492,13 +492,6 @@ body:has(.drive-shell) .topbar-actions {
   padding-left: calc(14px + 0.38em);
 }
 
-.field-help {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.55;
-}
-
 .auth-submit {
   height: 49px;
   margin-top: 5px;
