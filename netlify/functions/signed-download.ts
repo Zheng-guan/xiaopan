@@ -5,8 +5,6 @@ import { bearerToken, json, readJson } from "./_shared/http";
 import { authenticatedSupabase } from "./_shared/supabase";
 import { downloadDisposition, r2Client } from "./_shared/r2";
 
-const downloadUrlExpiresIn = 6 * 60 * 60;
-
 export default async (request: Request, _context: Context) => {
   if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
@@ -36,16 +34,16 @@ export default async (request: Request, _context: Context) => {
         Key: item.storage_path,
         ResponseContentDisposition: downloadDisposition(item.name),
       }),
-      { expiresIn: downloadUrlExpiresIn },
+      { expiresIn: 60 },
     );
-    return json({ url, expiresIn: downloadUrlExpiresIn });
+    return json({ url, expiresIn: 60 });
   }
 
   const { data, error } = await authentication.client.storage
     .from("drive")
-    .createSignedUrl(item.storage_path, downloadUrlExpiresIn, { download: item.name });
+    .createSignedUrl(item.storage_path, 60, { download: item.name });
   if (error) return json({ error: "Unable to sign download" }, 500);
-  return json({ url: data.signedUrl, expiresIn: downloadUrlExpiresIn });
+  return json({ url: data.signedUrl, expiresIn: 60 });
 };
 
 export const config: Config = {

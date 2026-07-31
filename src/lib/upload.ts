@@ -204,6 +204,25 @@ export async function cancelStoredResumableUpload(
   return true;
 }
 
+export async function cancelPendingUploadSession(
+  session: PendingUploadSession,
+  userId: string,
+) {
+  const ownerPrefix = `${SESSION_PREFIX}${userId}:`;
+  if (!session.localStorageKey.startsWith(ownerPrefix)) {
+    throw new Error("无权取消此断点上传");
+  }
+  const stored = readStoredSession(session.localStorageKey);
+  if (!stored) return false;
+  await multipartRequest({
+    action: "abort",
+    key: stored.key,
+    uploadId: stored.uploadId,
+  });
+  localStorage.removeItem(session.localStorageKey);
+  return true;
+}
+
 async function accessToken() {
   const {
     data: { session },

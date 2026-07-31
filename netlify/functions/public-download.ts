@@ -5,8 +5,6 @@ import { json, readJson } from "./_shared/http";
 import { publicSupabase, supabaseEnvironment } from "./_shared/supabase";
 import { downloadDisposition, r2Client } from "./_shared/r2";
 
-const downloadUrlExpiresIn = 6 * 60 * 60;
-
 export default async (request: Request, _context: Context) => {
   const uuidPattern =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -39,7 +37,7 @@ export default async (request: Request, _context: Context) => {
         Key: item.storage_path,
         ResponseContentDisposition: downloadDisposition(item.file_name),
       }),
-      { expiresIn: downloadUrlExpiresIn },
+      { expiresIn: 60 },
     );
     return json({ url });
   }
