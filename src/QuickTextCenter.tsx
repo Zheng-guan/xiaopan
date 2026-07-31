@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
+import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowLeft,
   Check,
@@ -15,6 +16,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { formatDate, initials } from "./lib/format";
+import { quickTransition } from "./lib/motion";
 import {
   createQuickText,
   deleteQuickText,
@@ -211,8 +213,17 @@ export default function QuickTextCenter(props: {
               </div>
             ) : (
               <div className="quick-text-list">
+                <AnimatePresence initial={false}>
                 {items.map((item, index) => (
-                  <article className="quick-text-item" key={item.id}>
+                  <motion.article
+                    className="quick-text-item"
+                    key={item.id}
+                    layout="position"
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, x: 8 }}
+                    transition={quickTransition}
+                  >
                     <div className="quick-text-item-meta">
                       <span>{index === 0 ? "最新" : "文字"}</span>
                       <time dateTime={item.created_at}>{formatDate(item.created_at)}</time>
@@ -244,8 +255,9 @@ export default function QuickTextCenter(props: {
                           : <Trash2 size={16} />}
                       </button>
                     </div>
-                  </article>
+                  </motion.article>
                 ))}
+                </AnimatePresence>
               </div>
             )}
           </section>

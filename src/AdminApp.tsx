@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
+import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowLeft,
   Cloud,
@@ -24,6 +25,7 @@ import {
   initials,
 } from "./lib/format";
 import { supabase } from "./lib/supabase";
+import { panelTransition, popoverVariants, quickTransition } from "./lib/motion";
 import type { AdminOverview, AdminUserSummary } from "./types";
 
 function errorMessage(error: unknown) {
@@ -163,8 +165,18 @@ export default function AdminApp(props: {
                 </div>
                 {users.length === 0 ? (
                   <div className="admin-empty"><UserRound size={26} /><span>没有匹配的用户</span></div>
-                ) : users.map((user) => (
-                  <div className="admin-user-row" key={user.id}>
+                ) : (
+                  <AnimatePresence initial={false}>
+                  {users.map((user) => (
+                  <motion.div
+                    className="admin-user-row"
+                    key={user.id}
+                    layout="position"
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, x: 8 }}
+                    transition={quickTransition}
+                  >
                     <div className="admin-user-cell">
                       <span className="avatar">{initials(user.email)}</span>
                       <span><strong>{user.email}</strong><small>注册于 {formatDate(user.createdAt)}</small></span>
@@ -190,17 +202,35 @@ export default function AdminApp(props: {
                     >
                       <Trash2 size={16} />
                     </button>
-                  </div>
-                ))}
+                  </motion.div>
+                  ))}
+                  </AnimatePresence>
+                )}
               </div>
             </section>
           </>
         )}
       </main>
 
+      <AnimatePresence>
       {target && (
-        <div className="modal-backdrop" onMouseDown={() => !deleting && setTarget(null)}>
-          <section className="modal" onMouseDown={(event) => event.stopPropagation()}>
+        <motion.div
+          className="modal-backdrop"
+          onMouseDown={() => !deleting && setTarget(null)}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={quickTransition}
+        >
+          <motion.section
+            className="modal"
+            onMouseDown={(event) => event.stopPropagation()}
+            variants={popoverVariants}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            transition={panelTransition}
+          >
             <header><h2>删除用户？</h2><button disabled={deleting} onClick={() => setTarget(null)}><X size={18} /></button></header>
             <div className="confirm-copy">
               <span className="danger-icon"><Trash2 size={21} /></span>
@@ -230,9 +260,10 @@ export default function AdminApp(props: {
                 永久删除
               </button>
             </div>
-          </section>
-        </div>
+          </motion.section>
+        </motion.div>
       )}
+      </AnimatePresence>
     </div>
   );
 }

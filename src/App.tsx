@@ -10,9 +10,11 @@ import {
   type ReactNode,
 } from "react";
 import type { Session } from "@supabase/supabase-js";
+import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import {
   Archive,
   ArrowDownAZ,
+  ArrowLeft,
   ArrowUpAZ,
   Check,
   ChevronDown,
@@ -48,18 +50,26 @@ import {
   Search,
   Share2,
   ShieldCheck,
+  Sun,
   Trash2,
   UploadCloud,
   Video,
   X,
 } from "lucide-react";
 import AdminApp from "./AdminApp";
+import BulightView from "./BulightView";
 import PublicShareView from "./PublicShareView";
 import QuickTextCenter from "./QuickTextCenter";
 import ShareCenter from "./ShareCenter";
 import ThemeToggle from "./ThemeToggle";
 import TurnstileWidget from "./TurnstileWidget";
 import { checkAdmin } from "./lib/admin";
+import {
+  fadeUpVariants,
+  panelTransition,
+  popoverVariants,
+  quickTransition,
+} from "./lib/motion";
 import {
   createFolder,
   deleteDriveItems,
@@ -128,6 +138,13 @@ interface TouchDragSession {
   timer: number | null;
   active: boolean;
   targets: DriveItem[];
+  source: HTMLElement;
+}
+
+interface SidebarSwipeSession {
+  pointerId: number;
+  startX: number;
+  startY: number;
   source: HTMLElement;
 }
 
@@ -276,17 +293,19 @@ export default function App() {
   }
 
   return (
-    <>
+    <MotionConfig reducedMotion="user" transition={quickTransition}>
       {content}
       <ThemeToggle />
-    </>
+    </MotionConfig>
   );
 }
 
 function AuthenticatedView({ session }: { session: Session }) {
   const [checking, setChecking] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [view, setView] = useState<"drive" | "admin" | "shares" | "quick-text">(() => {
+  const [view, setView] = useState<
+    "drive" | "admin" | "shares" | "quick-text" | "bulight"
+  >(() => {
     const shouldOpenAdmin =
       window.sessionStorage.getItem("xiaopan:open-admin") === "1";
     window.sessionStorage.removeItem("xiaopan:open-admin");
@@ -321,12 +340,12 @@ function AuthenticatedView({ session }: { session: Session }) {
     );
   }
 
-  if (isAdmin && view === "admin") {
-    return <AdminApp session={session} onOpenDrive={() => setView("drive")} />;
-  }
+  let activeView: ReactNode;
 
-  if (view === "shares") {
-    return (
+  if (isAdmin && view === "admin") {
+    activeView = <AdminApp session={session} onOpenDrive={() => setView("drive")} />;
+  } else if (view === "shares") {
+    activeView = (
       <ShareCenter
         session={session}
         initialFile={shareFile}
@@ -334,28 +353,45 @@ function AuthenticatedView({ session }: { session: Session }) {
         onBack={() => setView("drive")}
       />
     );
-  }
-
-  if (view === "quick-text") {
-    return (
+  } else if (view === "quick-text") {
+    activeView = (
       <QuickTextCenter
         session={session}
         onBack={() => setView("drive")}
       />
     );
+  } else if (view === "bulight") {
+    activeView = <BulightView onBack={() => setView("drive")} />;
+  } else {
+    activeView = (
+      <DriveApp
+        session={session}
+        isAdmin={isAdmin}
+        onOpenAdmin={() => setView("admin")}
+        onOpenBulight={() => setView("bulight")}
+        onOpenQuickText={() => setView("quick-text")}
+        onOpenShares={(file) => {
+          setShareFile(file);
+          setView("shares");
+        }}
+      />
+    );
   }
 
   return (
-    <DriveApp
-      session={session}
-      isAdmin={isAdmin}
-      onOpenAdmin={() => setView("admin")}
-      onOpenQuickText={() => setView("quick-text")}
-      onOpenShares={(file) => {
-        setShareFile(file);
-        setView("shares");
-      }}
-    />
+    <AnimatePresence mode="wait" initial={false}>
+      <motion.div
+        key={view}
+        className="app-view-motion"
+        variants={fadeUpVariants}
+        initial="hidden"
+        animate="visible"
+        exit="exit"
+        transition={panelTransition}
+      >
+        {activeView}
+      </motion.div>
+    </AnimatePresence>
   );
 }
 
@@ -795,12 +831,14 @@ function DriveApp({
   session,
   isAdmin,
   onOpenAdmin,
+  onOpenBulight,
   onOpenQuickText,
   onOpenShares,
 }: {
   session: Session;
   isAdmin: boolean;
   onOpenAdmin: () => void;
+  onOpenBulight: () => void;
   onOpenQuickText: () => void;
   onOpenShares: (file: DriveItem | null) => void;
 }) {
@@ -823,6 +861,10 @@ function DriveApp({
   const [touchDragPreview, setTouchDragPreview] =
     useState<TouchDragPreview | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [compactSidebar, setCompactSidebar] = useState(() =>
+    window.matchMedia("(max-width: 980px)").matches,
+  );
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(false);
   const [modal, setModal] = useState<
     | { type: "folder" }
     | { type: "rename"; item: DriveItem }
@@ -844,6 +886,7 @@ function DriveApp({
   const dragTargets = useRef<DriveItem[]>([]);
   const dropTargetRef = useRef<DropTargetKey>(null);
   const touchDragSession = useRef<TouchDragSession | null>(null);
+  const sidebarSwipeSession = useRef<SidebarSwipeSession | null>(null);
   const moveInFlight = useRef(false);
   const speedSamples = useRef(
     new Map<string, { bytes: number; at: number; smoothed: number }>(),
@@ -899,6 +942,17 @@ function DriveApp({
   }, [toast]);
 
   useEffect(() => {
+    const media = window.matchMedia("(max-width: 980px)");
+    const syncLayout = () => {
+      setCompactSidebar(media.matches);
+      if (!media.matches) setSidebarOpen(false);
+    };
+    syncLayout();
+    media.addEventListener("change", syncLayout);
+    return () => media.removeEventListener("change", syncLayout);
+  }, []);
+
+  useEffect(() => {
     document.body.classList.toggle("touch-drag-active", Boolean(touchDragPreview));
     return () => document.body.classList.remove("touch-drag-active");
   }, [touchDragPreview]);
@@ -935,6 +989,67 @@ function DriveApp({
     setQuery("");
     setSearch("");
     setPath((current) => [...current, item]);
+  }
+
+  function openParentFolder() {
+    setCategory("all");
+    setQuery("");
+    setSearch("");
+    setPath((current) => current.slice(0, -1));
+  }
+
+  function toggleSidebar() {
+    if (compactSidebar) {
+      setSidebarOpen((current) => !current);
+    } else {
+      setDesktopSidebarCollapsed((current) => !current);
+    }
+  }
+
+  function beginSidebarSwipe(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.pointerType !== "touch" || sidebarOpen) return;
+    const session: SidebarSwipeSession = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      source: event.currentTarget,
+    };
+    sidebarSwipeSession.current = session;
+    try {
+      session.source.setPointerCapture(session.pointerId);
+    } catch {
+      // The gesture also works without pointer capture.
+    }
+  }
+
+  function moveSidebarSwipe(event: ReactPointerEvent<HTMLDivElement>) {
+    const session = sidebarSwipeSession.current;
+    if (!session || event.pointerId !== session.pointerId) return;
+    const deltaX = event.clientX - session.startX;
+    const deltaY = event.clientY - session.startY;
+
+    if (deltaX < -8 || (Math.abs(deltaY) > 34 && Math.abs(deltaY) > deltaX)) {
+      sidebarSwipeSession.current = null;
+      return;
+    }
+
+    if (deltaX >= 64 && Math.abs(deltaY) <= 52) {
+      event.preventDefault();
+      sidebarSwipeSession.current = null;
+      setSidebarOpen(true);
+      window.navigator.vibrate?.(8);
+      try {
+        session.source.releasePointerCapture(session.pointerId);
+      } catch {
+        // The browser may already have released this pointer.
+      }
+    }
+  }
+
+  function finishSidebarSwipe(event: ReactPointerEvent<HTMLDivElement>) {
+    if (sidebarSwipeSession.current?.pointerId === event.pointerId) {
+      sidebarSwipeSession.current = null;
+    }
   }
 
   async function startFiles(fileList: FileList | File[]) {
@@ -1570,7 +1685,7 @@ function DriveApp({
 
   return (
     <div
-      className="drive-shell"
+      className={`drive-shell ${desktopSidebarCollapsed ? "sidebar-collapsed" : ""}`}
       onDragEnter={(event) => {
         if (Array.from(event.dataTransfer.types).includes("Files")) {
           event.preventDefault();
@@ -1578,19 +1693,45 @@ function DriveApp({
         }
       }}
     >
-      {sidebarOpen && (
-        <button
-          className="sidebar-scrim"
-          aria-label="关闭侧栏"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-      <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
+      <div
+        className="sidebar-swipe-zone"
+        aria-hidden="true"
+        onPointerDown={beginSidebarSwipe}
+        onPointerMove={moveSidebarSwipe}
+        onPointerUp={finishSidebarSwipe}
+        onPointerCancel={finishSidebarSwipe}
+      />
+      <AnimatePresence>
+        {sidebarOpen && (
+          <motion.button
+            className="sidebar-scrim"
+            aria-label="关闭侧栏"
+            onClick={() => setSidebarOpen(false)}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={quickTransition}
+          />
+        )}
+      </AnimatePresence>
+      <aside
+        id="drive-sidebar"
+        className={`sidebar ${sidebarOpen ? "open" : ""}`}
+      >
         <div className="brand-lockup">
           <span className="brand-mark">
             <Cloud size={23} strokeWidth={2.3} />
           </span>
           <span>小盘</span>
+          <button
+            type="button"
+            className="sidebar-close"
+            onClick={() => setSidebarOpen(false)}
+            aria-label="关闭侧栏"
+            title="关闭侧栏"
+          >
+            <X size={18} />
+          </button>
         </div>
         <button
           className="upload-button"
@@ -1621,6 +1762,11 @@ function DriveApp({
           <button onClick={() => onOpenShares(null)}>
             <Share2 size={18} />
             <span>分享中心</span>
+          </button>
+          <span className="nav-caption admin-nav-caption">工具</span>
+          <button onClick={onOpenBulight}>
+            <Sun size={18} />
+            <span>屏幕补光灯</span>
           </button>
           {isAdmin && (
             <>
@@ -1669,9 +1815,29 @@ function DriveApp({
       <main className="drive-main">
         <header className="topbar">
           <button
+            type="button"
             className="icon-button mobile-menu"
-            onClick={() => setSidebarOpen(true)}
-            aria-label="打开侧栏"
+            onClick={toggleSidebar}
+            aria-label={
+              compactSidebar
+                ? sidebarOpen
+                  ? "关闭侧栏"
+                  : "打开侧栏"
+                : desktopSidebarCollapsed
+                  ? "展开侧栏"
+                  : "收起侧栏"
+            }
+            aria-controls="drive-sidebar"
+            aria-expanded={compactSidebar ? sidebarOpen : !desktopSidebarCollapsed}
+            title={
+              compactSidebar
+                ? sidebarOpen
+                  ? "关闭侧栏"
+                  : "打开侧栏"
+                : desktopSidebarCollapsed
+                  ? "展开侧栏"
+                  : "收起侧栏"
+            }
           >
             <Menu size={20} />
           </button>
@@ -1713,53 +1879,68 @@ function DriveApp({
         <section className="workspace">
           <div className="workspace-heading">
             <div>
-              <div className="breadcrumbs">
-                <button
-                  className={dropTarget === "root" ? "drop-target" : ""}
-                  data-drop-folder-id="root"
-                  onClick={() => {
-                    setPath([]);
-                    setCategory("all");
-                    setQuery("");
-                    setSearch("");
-                  }}
-                  onDragOver={(event) => handleMoveDragOver(event, "root")}
-                  onDragLeave={(event) => handleMoveDragLeave(event, "root")}
-                  onDrop={(event) =>
-                    handleMoveDrop(event, "root", "我的云盘")
-                  }
-                >
-                  我的云盘
-                </button>
-                {path.map((folder, index) => (
-                  <span key={folder.id}>
-                    <ChevronRight size={14} />
-                    <button
-                      className={dropTarget === folder.id ? "drop-target" : ""}
-                      data-drop-folder-id={folder.id}
-                      onClick={() => setPath(path.slice(0, index + 1))}
-                      onDragOver={(event) =>
-                        handleMoveDragOver(event, folder.id)
-                      }
-                      onDragLeave={(event) =>
-                        handleMoveDragLeave(event, folder.id)
-                      }
-                      onDrop={(event) =>
-                        handleMoveDrop(event, folder.id, folder.name)
-                      }
-                    >
-                      {folder.name}
-                    </button>
-                  </span>
-                ))}
+              <div className="folder-navigation">
+                <div className="breadcrumbs">
+                  <button
+                    className={dropTarget === "root" ? "drop-target" : ""}
+                    data-drop-folder-id="root"
+                    onClick={() => {
+                      setPath([]);
+                      setCategory("all");
+                      setQuery("");
+                      setSearch("");
+                    }}
+                    onDragOver={(event) => handleMoveDragOver(event, "root")}
+                    onDragLeave={(event) => handleMoveDragLeave(event, "root")}
+                    onDrop={(event) =>
+                      handleMoveDrop(event, "root", "我的云盘")
+                    }
+                  >
+                    我的云盘
+                  </button>
+                  {path.map((folder, index) => (
+                    <span key={folder.id}>
+                      <ChevronRight size={14} />
+                      <button
+                        className={dropTarget === folder.id ? "drop-target" : ""}
+                        data-drop-folder-id={folder.id}
+                        onClick={() => setPath(path.slice(0, index + 1))}
+                        onDragOver={(event) =>
+                          handleMoveDragOver(event, folder.id)
+                        }
+                        onDragLeave={(event) =>
+                          handleMoveDragLeave(event, folder.id)
+                        }
+                        onDrop={(event) =>
+                          handleMoveDrop(event, folder.id, folder.name)
+                        }
+                      >
+                        {folder.name}
+                      </button>
+                    </span>
+                  ))}
+                </div>
               </div>
-              <h1>
-                {query
-                  ? `“${query}” 的搜索结果`
-                  : category === "all"
-                    ? currentFolder?.name || "全部文件"
-                    : navItems.find((item) => item.id === category)?.label}
-              </h1>
+              <div className="workspace-title-row">
+                {path.length > 0 && (
+                  <button
+                    type="button"
+                    className="folder-up-button"
+                    onClick={openParentFolder}
+                    aria-label="返回上一级文件夹"
+                    title="返回上一级文件夹"
+                  >
+                    <ArrowLeft size={18} />
+                  </button>
+                )}
+                <h1>
+                  {query
+                    ? `“${query}” 的搜索结果`
+                    : category === "all"
+                      ? currentFolder?.name || "全部文件"
+                      : navItems.find((item) => item.id === category)?.label}
+                </h1>
+              </div>
               <p>
                 {loading
                   ? "正在整理内容…"
@@ -1795,8 +1976,17 @@ function DriveApp({
             </div>
           </div>
 
-          {pendingResumesHere.length > 0 && (
-            <aside className="resume-upload-panel" aria-label="未完成上传">
+          <AnimatePresence initial={false}>
+            {pendingResumesHere.length > 0 && (
+            <motion.aside
+              className="resume-upload-panel"
+              aria-label="未完成上传"
+              variants={fadeUpVariants}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+              transition={panelTransition}
+            >
               <div className="resume-upload-summary">
                 <span className="resume-upload-icon">
                   <RotateCcw size={18} />
@@ -1831,8 +2021,9 @@ function DriveApp({
                   </div>
                 ))}
               </div>
-            </aside>
-          )}
+            </motion.aside>
+            )}
+          </AnimatePresence>
 
           <div className="toolbar">
             <div className="toolbar-left">
@@ -1921,7 +2112,16 @@ function DriveApp({
             }}
           />
 
-          <div className="file-area">
+          <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={`${currentFolder?.id ?? "root"}:${category}:${query}:${viewMode}`}
+            className="file-area"
+            variants={fadeUpVariants}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            transition={panelTransition}
+          >
             {loading ? (
               <div className="empty-state">
                 <LoaderCircle className="spin" size={28} />
@@ -1965,6 +2165,7 @@ function DriveApp({
                   <span>修改时间</span>
                   <span />
                 </div>
+                <AnimatePresence initial={false}>
                 {visibleItems.map((item) => (
                   <FileRow
                     key={item.id}
@@ -2004,11 +2205,13 @@ function DriveApp({
                     onPointerCancel={cancelTouchDrag}
                   />
                 ))}
+                </AnimatePresence>
               </div>
             ) : (
               <div className="file-grid">
+                <AnimatePresence initial={false}>
                 {visibleItems.map((item) => (
-                  <article
+                  <motion.article
                     key={item.id}
                     className={[
                       "file-card",
@@ -2025,8 +2228,8 @@ function DriveApp({
                     data-drop-folder-id={
                       item.kind === "folder" ? item.id : undefined
                     }
-                    onDragStart={(event) => beginDesktopDrag(event, item)}
-                    onDragEnd={finishDesktopDrag}
+                    onDragStartCapture={(event) => beginDesktopDrag(event, item)}
+                    onDragEndCapture={finishDesktopDrag}
                     onDragOver={(event) => {
                       if (item.kind === "folder") {
                         handleMoveDragOver(event, item.id);
@@ -2051,21 +2254,33 @@ function DriveApp({
                     }}
                     onClick={(event) => {
                       if (
-                        !(window.matchMedia?.("(pointer: coarse)").matches ||
-                          window.navigator.maxTouchPoints > 0) ||
                         (event.target as HTMLElement).closest(
                           "button, input, label, .card-actions",
                         )
                       ) {
                         return;
                       }
-                      item.kind === "folder"
-                        ? openFolder(item)
-                        : void download(item);
+                      if (item.kind === "folder") {
+                        openFolder(item);
+                        return;
+                      }
+                      if (
+                        window.matchMedia?.("(pointer: coarse)").matches ||
+                        window.navigator.maxTouchPoints > 0
+                      ) {
+                        void download(item);
+                      }
                     }}
-                    onDoubleClick={() =>
-                      item.kind === "folder" ? openFolder(item) : void download(item)
-                    }
+                    onDoubleClick={() => {
+                      if (item.kind === "file") void download(item);
+                    }}
+                    layout="position"
+                    initial={{ opacity: 0, y: 5, scale: 0.99 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.985 }}
+                    whileHover={{ y: -2 }}
+                    whileTap={{ scale: 0.992 }}
+                    transition={quickTransition}
                   >
                     <div className={`card-icon ${item.kind}`}>
                       {fileIcon(item, 29)}
@@ -2107,48 +2322,69 @@ function DriveApp({
                         <MoreHorizontal size={16} />
                       </button>
                     </div>
-                  </article>
+                  </motion.article>
                 ))}
+                </AnimatePresence>
               </div>
             )}
-          </div>
+          </motion.div>
+          </AnimatePresence>
         </section>
       </main>
 
+      <AnimatePresence>
       {dragging && (
-        <div
+        <motion.div
           className="drop-overlay"
           onDragOver={(event) => event.preventDefault()}
           onDragLeave={(event) => {
             if (event.currentTarget === event.target) setDragging(false);
           }}
           onDrop={handleUploadDrop}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={quickTransition}
         >
-          <div>
+          <motion.div
+            variants={popoverVariants}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            transition={panelTransition}
+          >
             <UploadCloud size={38} />
             <strong>松开即可上传</strong>
             <span>支持大文件分片与断点续传</span>
-          </div>
-        </div>
+          </motion.div>
+        </motion.div>
       )}
+      </AnimatePresence>
 
+      <AnimatePresence>
       {touchDragPreview && (
-        <div
+        <motion.div
           className="touch-drag-preview"
           style={{
             left: touchDragPreview.x,
             top: touchDragPreview.y,
           }}
           aria-hidden="true"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={quickTransition}
         >
           <Move size={17} />
           <span>{touchDragPreview.label}</span>
           {touchDragPreview.count > 1 && (
             <strong>{touchDragPreview.count}</strong>
           )}
-        </div>
+        </motion.div>
       )}
+      </AnimatePresence>
 
+      <AnimatePresence>
       {tasks.length > 0 && (
         <UploadCenter
           tasks={tasks}
@@ -2167,9 +2403,12 @@ function DriveApp({
           }
         />
       )}
+      </AnimatePresence>
 
+      <AnimatePresence mode="wait">
       {modal?.type === "folder" && (
         <TextModal
+          key="folder-modal"
           title="新建文件夹"
           label="文件夹名称"
           placeholder="例如：旅行照片"
@@ -2184,6 +2423,7 @@ function DriveApp({
       )}
       {modal?.type === "rename" && (
         <TextModal
+          key="rename-modal"
           title="重命名"
           label="新名称"
           initialValue={modal.item.name}
@@ -2198,6 +2438,7 @@ function DriveApp({
       )}
       {modal?.type === "move" && (
         <MoveModal
+          key="move-modal"
           targets={modal.items}
           folders={folders}
           onClose={() => setModal(null)}
@@ -2213,6 +2454,7 @@ function DriveApp({
       )}
       {modal?.type === "delete" && (
         <ConfirmModal
+          key="delete-modal"
           title={`删除 ${modal.items.length} 项内容？`}
           description="文件夹内的所有内容也会被永久删除，此操作无法撤销。"
           confirmText="永久删除"
@@ -2226,6 +2468,7 @@ function DriveApp({
       )}
       {modal?.type === "cancel-resume" && (
         <ConfirmModal
+          key="cancel-resume-modal"
           title={`取消 ${modal.session.displayName} 的上传？`}
           description="已经上传到 Cloudflare R2 的分片会被永久删除，同时释放这次上传占用的预留容量。"
           confirmText="取消上传并删除分片"
@@ -2233,16 +2476,25 @@ function DriveApp({
           onConfirm={() => cancelPendingResume(modal.session)}
         />
       )}
+      </AnimatePresence>
 
+      <AnimatePresence>
       {toast && (
-        <div className="toast">
+        <motion.div
+          className="toast"
+          initial={{ opacity: 0, x: "-50%", y: 8, scale: 0.985 }}
+          animate={{ opacity: 1, x: "-50%", y: 0, scale: 1 }}
+          exit={{ opacity: 0, x: "-50%", y: 5, scale: 0.99 }}
+          transition={panelTransition}
+        >
           <CircleAlert size={17} />
           <span>{toast}</span>
           <button onClick={() => setToast(null)}>
             <X size={15} />
           </button>
-        </div>
+        </motion.div>
       )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -2270,7 +2522,7 @@ function FileRow(props: {
   onPointerCancel: (event: ReactPointerEvent<HTMLDivElement>) => void;
 }) {
   return (
-    <div
+    <motion.div
       className={[
         "file-row",
         "draggable-item",
@@ -2284,8 +2536,8 @@ function FileRow(props: {
       data-drop-folder-id={
         props.item.kind === "folder" ? props.item.id : undefined
       }
-      onDragStart={props.onDragStart}
-      onDragEnd={props.onDragEnd}
+      onDragStartCapture={props.onDragStart}
+      onDragEndCapture={props.onDragEnd}
       onDragOver={props.onDragOver}
       onDragLeave={props.onDragLeave}
       onDrop={props.onDrop}
@@ -2296,6 +2548,11 @@ function FileRow(props: {
       onContextMenu={(event) => {
         if (props.dragging) event.preventDefault();
       }}
+      layout="position"
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, x: -6 }}
+      transition={quickTransition}
     >
       <label>
         <input type="checkbox" checked={props.checked} onChange={props.onToggle} />
@@ -2303,14 +2560,18 @@ function FileRow(props: {
       <button
         className="file-name"
         onClick={() => {
-          if (
+          if (props.item.kind === "folder") {
+            props.onOpen();
+          } else if (
             window.matchMedia?.("(pointer: coarse)").matches ||
             window.navigator.maxTouchPoints > 0
           ) {
             props.onOpen();
           }
         }}
-        onDoubleClick={props.onOpen}
+        onDoubleClick={() => {
+          if (props.item.kind === "file") props.onOpen();
+        }}
       >
         <span className={`file-icon ${props.item.kind}`}>
           {fileIcon(props.item)}
@@ -2369,7 +2630,7 @@ function FileRow(props: {
           </div>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }
 
@@ -2388,7 +2649,15 @@ function UploadCenter(props: {
     ),
   ).length;
   return (
-    <aside className={`upload-center ${props.open ? "open" : ""}`}>
+    <motion.aside
+      className={`upload-center ${props.open ? "open" : ""}`}
+      variants={popoverVariants}
+      initial="hidden"
+      animate="visible"
+      exit="exit"
+      transition={panelTransition}
+      layout
+    >
       <button className="upload-center-head" onClick={props.onToggle}>
         <span>
           <UploadCloud size={18} />
@@ -2396,8 +2665,16 @@ function UploadCenter(props: {
         </span>
         <ChevronDown size={17} />
       </button>
+      <AnimatePresence initial={false}>
       {props.open && (
-        <div className="upload-list">
+        <motion.div
+          className="upload-list"
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: "auto" }}
+          exit={{ opacity: 0, height: 0 }}
+          transition={panelTransition}
+        >
+          <AnimatePresence initial={false}>
           {props.tasks.map((task) => {
             const progress =
               task.total > 0 ? Math.min(100, (task.uploaded / task.total) * 100) : 0;
@@ -2408,7 +2685,15 @@ function UploadCenter(props: {
                   )
                 : "计算中";
             return (
-              <div className="upload-task" key={task.id}>
+              <motion.div
+                className="upload-task"
+                key={task.id}
+                layout="position"
+                initial={{ opacity: 0, y: 5 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, x: 8 }}
+                transition={quickTransition}
+              >
                 <div className="upload-file-icon">
                   <File size={18} />
                 </div>
@@ -2473,15 +2758,17 @@ function UploadCenter(props: {
                   )}
                   {task.status === "complete" && <Check size={16} />}
                 </div>
-              </div>
+              </motion.div>
             );
           })}
+          </AnimatePresence>
           <button className="clear-tasks" onClick={props.onClear}>
             清除已完成任务
           </button>
-        </div>
+        </motion.div>
       )}
-    </aside>
+      </AnimatePresence>
+    </motion.aside>
   );
 }
 
@@ -2491,8 +2778,23 @@ function ModalFrame(props: {
   onClose: () => void;
 }) {
   return (
-    <div className="modal-backdrop" onMouseDown={props.onClose}>
-      <section className="modal" onMouseDown={(event) => event.stopPropagation()}>
+    <motion.div
+      className="modal-backdrop"
+      onMouseDown={props.onClose}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={quickTransition}
+    >
+      <motion.section
+        className="modal"
+        onMouseDown={(event) => event.stopPropagation()}
+        variants={popoverVariants}
+        initial="hidden"
+        animate="visible"
+        exit="exit"
+        transition={panelTransition}
+      >
         <header>
           <h2>{props.title}</h2>
           <button onClick={props.onClose} aria-label="关闭">
@@ -2500,8 +2802,8 @@ function ModalFrame(props: {
           </button>
         </header>
         {props.children}
-      </section>
-    </div>
+      </motion.section>
+    </motion.div>
   );
 }
 

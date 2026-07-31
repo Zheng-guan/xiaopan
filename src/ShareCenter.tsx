@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
+import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowLeft,
   Check,
@@ -19,6 +20,7 @@ import {
 } from "lucide-react";
 import { listAllFiles } from "./lib/drive";
 import { formatBytes, formatDate, initials } from "./lib/format";
+import { quickTransition } from "./lib/motion";
 import {
   createShare,
   deleteShare,
@@ -320,13 +322,22 @@ export default function ShareCenter(props: {
               </div>
             ) : (
               <div className="share-list">
+                <AnimatePresence initial={false}>
                 {shares.map((share) => {
                   const expired =
                     Boolean(share.expires_at) &&
                     new Date(share.expires_at as string).getTime() <= Date.now();
                   const url = publicShareUrl(share.public_id);
                   return (
-                    <article className={`share-list-item ${expired ? "expired" : ""}`} key={share.id}>
+                    <motion.article
+                      className={`share-list-item ${expired ? "expired" : ""}`}
+                      key={share.id}
+                      layout="position"
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, x: 8 }}
+                      transition={quickTransition}
+                    >
                       <span className={`share-kind-icon ${share.share_type}`}>
                         {typeIcon(share.share_type, 19)}
                       </span>
@@ -378,9 +389,10 @@ export default function ShareCenter(props: {
                             : <Trash2 size={16} />}
                         </button>
                       </div>
-                    </article>
+                    </motion.article>
                   );
                 })}
+                </AnimatePresence>
               </div>
             )}
           </section>
