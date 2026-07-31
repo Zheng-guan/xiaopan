@@ -26,7 +26,7 @@ Files are uploaded directly from the browser to Cloudflare R2 with server-signed
 - Folder navigation, list/grid views, search, sorting, and storage statistics
 - Drag-and-drop and multi-file uploads
 - Cloudflare R2 multipart uploads with adaptive 10 MiB-or-larger parts
-- Pause/resume, retry, upload progress, and live transfer speed
+- Pause/resume, retry, cancellation with partial-upload cleanup, upload progress, and live transfer speed
 - Short-lived signed download URLs and browser-streamed downloads
 - Rename, move, recursive delete, and multi-select operations
 - **Quick Text Transfer:** paste on a phone, receive it on a computer, and copy it with one click
@@ -157,6 +157,7 @@ The administrator function must require a valid JWT:
 
 ```bash
 npx supabase functions deploy admin-dashboard
+npx supabase functions deploy registration-availability --no-verify-jwt
 ```
 
 The public-share function uses an unguessable capability token and therefore accepts requests without a user JWT:
@@ -242,8 +243,10 @@ The administrator entry displays only a password field. The fixed email is used 
 New files upload directly from the browser to R2 through server-signed multipart URLs:
 
 - Base part size is **10 MiB**, increasing automatically before the 10,000-part limit.
+- The 10 MiB value is a multipart boundary, not a bandwidth throttle. File bytes go directly from the browser to R2; practical speed is governed by the user's uplink, browser, network route to Cloudflare, and the current sequential-part upload strategy.
 - Failed parts retry with fresh one-hour signed URLs.
 - Pause/resume state and completed part ETags are retained in R2. Re-select the same local file to continue after a refresh.
+- Cancelling a task aborts the R2 multipart upload, deletes its uploaded parts, releases the database quota reservation, removes the local resumable session, and clears the task record.
 - R2 supports multipart objects up to **5 TiB**. Browser, network, account billing, and the configured UI limit can impose lower practical limits.
 - Xiaopan enforces a **10 GB decimal shared pool**. Each non-admin account is limited to **200 MB**. The administrator receives the unallocated balance: `10 GB − 200 MB × non-admin account count`.
 - The administrator's single-file ceiling is **10 GB**. A non-admin account remains limited to **200 MB total**, so its effective single-file limit cannot exceed its remaining account quota.

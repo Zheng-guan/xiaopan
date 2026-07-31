@@ -27,6 +27,7 @@ interface MultipartResponse {
 export interface ResumableUpload {
   start: () => void;
   abort: () => Promise<void>;
+  cancel: () => Promise<void>;
 }
 
 export interface ResumableUploadOptions {
@@ -158,6 +159,7 @@ export async function createResumableUpload(
 
   const uploadSession = stored;
   let paused = false;
+  let cancelled = false;
   let running = false;
   let request: XMLHttpRequest | null = null;
 
@@ -169,7 +171,7 @@ export async function createResumableUpload(
     }, 0);
 
   async function run() {
-    if (running) return;
+    if (running || cancelled) return;
     running = true;
     paused = false;
     try {
@@ -177,7 +179,7 @@ export async function createResumableUpload(
       const partCount = Math.max(1, Math.ceil(options.file.size / partSize));
 
       for (let partNumber = 1; partNumber <= partCount; partNumber += 1) {
-        if (paused) return;
+        if (paused || cancelled) return;
         if (parts.some((part) => part.PartNumber === partNumber)) continue;
 
         const start = (partNumber - 1) * partSize;
@@ -186,8 +188,9 @@ export async function createResumableUpload(
         let lastError: unknown;
 
         for (const retryDelay of RETRY_DELAYS) {
-          if (paused) return;
+          if (paused || cancelled) return;
           if (retryDelay) await delay(retryDelay);
+          if (paused || cancelled) return;
           try {
             const signed = await multipartRequest({
               action: "sign-part",
@@ -216,7 +219,11 @@ export async function createResumableUpload(
             break;
           } catch (error) {
             lastError = error;
-            if (paused || (error instanceof DOMException && error.name === "AbortError")) {
+            if (
+              paused ||
+              cancelled ||
+              (error instanceof DOMException && error.name === "AbortError")
+            ) {
               return;
             }
           }
@@ -224,6 +231,7 @@ export async function createResumableUpload(
         if (lastError) throw lastError;
       }
 
+      if (paused || cancelled) return;
       const completed = await multipartRequest({
         action: "complete",
         key: uploadSession.key,
@@ -254,6 +262,26 @@ export async function createResumableUpload(
     async abort() {
       paused = true;
       request?.abort();
+    },
+    async cancel() {
+      if (cancelled) return;
+      cancelled = true;
+      paused = true;
+      request?.abort();
+      try {
+        await multipartRequest({
+          action: "abort",
+          key: uploadSession.key,
+          uploadId: uploadSession.uploadId,
+        });
+        localStorage.removeItem(key);
+        parts = [];
+      } catch (error) {
+        // Keep the resumable session when cleanup fails, so the user can retry
+        // cancellation or resume without orphaning uploaded R2 parts.
+        cancelled = false;
+        throw error;
+      }
     },
   };
 }

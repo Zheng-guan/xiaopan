@@ -1529,9 +1529,11 @@ body.touch-drag-active {
 }
 
 .task-action {
-  width: 28px;
-  display: grid;
-  place-items: center;
+  width: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
   color: var(--green);
 }
 
@@ -1544,6 +1546,14 @@ body.touch-drag-active {
 
 .task-action button:hover {
   background: var(--green-soft);
+}
+
+.task-action .cancel-upload {
+  color: var(--danger);
+}
+
+.task-action .cancel-upload:hover {
+  background: #fff0ef;
 }
 
 .clear-tasks {

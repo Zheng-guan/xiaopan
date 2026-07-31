@@ -20,6 +20,18 @@ export const supabase = createClient(
   },
 );
 
+export async function registrationEmailAvailable(email: string) {
+  const { data, error } = await supabase.functions.invoke<{
+    available?: boolean;
+    error?: string;
+  }>("registration-availability", {
+    body: { email: email.trim().toLowerCase() },
+  });
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+  return data?.available === true;
+}
+
 export const projectRef = (() => {
   try {
     return new URL(supabaseUrl).hostname.split(".")[0] ?? "";

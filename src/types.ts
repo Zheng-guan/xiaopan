@@ -39,6 +39,7 @@ export type UploadStatus =
   | "uploading"
   | "paused"
   | "retrying"
+  | "cancelling"
   | "complete"
   | "error";
 

@@ -82,6 +82,7 @@ import {
 import {
   isSupabaseConfigured,
   maxFileSizeBytes,
+  registrationEmailAvailable,
   supabase,
 } from "./lib/supabase";
 import {
@@ -485,6 +486,10 @@ function AuthView() {
         window.location.replace("/");
         return;
       } else {
+        const available = await registrationEmailAvailable(email);
+        if (!available) {
+          throw new Error("该邮箱已注册，请直接登录。");
+        }
         const { data, error: signUpError } = await supabase.auth.signUp({
           email: email.trim(),
           password: temporarySignupPassword(),
@@ -557,7 +562,7 @@ function AuthView() {
             </div>
             <div>
               <strong>为不稳定网络而生</strong>
-              <span>6 MB 智能分片 · 自动重试 · 随时继续</span>
+              <span>10 MB 智能分片 · 自动重试 · 随时继续</span>
             </div>
             <Gauge size={22} />
           </div>
@@ -825,6 +830,7 @@ function DriveApp({
   const [toast, setToast] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const uploads = useRef(new Map<string, ResumableUpload>());
+  const cancelledTaskIds = useRef(new Set<string>());
   const dragTargets = useRef<DriveItem[]>([]);
   const dropTargetRef = useRef<DropTargetKey>(null);
   const touchDragSession = useRef<TouchDragSession | null>(null);
@@ -956,6 +962,7 @@ function DriveApp({
         userId,
         parentId: currentFolder?.id ?? null,
         onProgress: (uploaded, total) => {
+          if (cancelledTaskIds.current.has(task.id)) return;
           const now = performance.now();
           const previous = speedSamples.current.get(task.id) ?? {
             bytes: uploaded,
@@ -1006,6 +1013,7 @@ function DriveApp({
           void refreshRef.current();
         },
         onError: (uploadError) => {
+          if (cancelledTaskIds.current.has(task.id)) return;
           setTasks((current) =>
             current.map((item) =>
               item.id === task.id
@@ -1020,6 +1028,15 @@ function DriveApp({
           );
         },
       });
+      if (cancelledTaskIds.current.has(task.id)) {
+        try {
+          await upload.cancel();
+          finishCancelledTask(task.id);
+        } catch (cancelError) {
+          markCancelFailed(task.id, cancelError);
+        }
+        return;
+      }
       uploads.current.set(task.id, upload);
       setTasks((current) =>
         current.map((item) =>
@@ -1028,6 +1045,10 @@ function DriveApp({
       );
       upload.start();
     } catch (uploadError) {
+      if (cancelledTaskIds.current.has(task.id)) {
+        finishCancelledTask(task.id);
+        return;
+      }
       setTasks((current) =>
         current.map((item) =>
           item.id === task.id
@@ -1056,6 +1077,48 @@ function DriveApp({
           : task,
       ),
     );
+  }
+
+  function finishCancelledTask(id: string) {
+    cancelledTaskIds.current.delete(id);
+    uploads.current.delete(id);
+    speedSamples.current.delete(id);
+    setTasks((current) => current.filter((task) => task.id !== id));
+    void refreshRef.current();
+  }
+
+  function markCancelFailed(id: string, cancelError: unknown) {
+    cancelledTaskIds.current.delete(id);
+    setTasks((current) =>
+      current.map((task) =>
+        task.id === id
+          ? {
+              ...task,
+              status: "error",
+              speed: 0,
+              error: `取消失败：${messageFrom(cancelError)}`,
+            }
+          : task,
+      ),
+    );
+  }
+
+  async function cancelTask(id: string) {
+    cancelledTaskIds.current.add(id);
+    setTasks((current) =>
+      current.map((task) =>
+        task.id === id ? { ...task, status: "cancelling", speed: 0 } : task,
+      ),
+    );
+    const upload = uploads.current.get(id);
+    if (!upload) return;
+
+    try {
+      await upload.cancel();
+      finishCancelledTask(id);
+    } catch (cancelError) {
+      markCancelFailed(id, cancelError);
+    }
   }
 
   async function download(item: DriveItem) {
@@ -1943,6 +2006,7 @@ function DriveApp({
           onToggle={() => setUploadPanelOpen((value) => !value)}
           onPause={(id) => void pauseTask(id)}
           onResume={resumeTask}
+          onCancel={(id) => void cancelTask(id)}
           onClear={() =>
             setTasks((current) =>
               current.filter(
@@ -2156,10 +2220,13 @@ function UploadCenter(props: {
   onToggle: () => void;
   onPause: (id: string) => void;
   onResume: (id: string) => void;
+  onCancel: (id: string) => void;
   onClear: () => void;
 }) {
   const active = props.tasks.filter((task) =>
-    ["queued", "uploading", "paused", "retrying"].includes(task.status),
+    ["queued", "uploading", "paused", "retrying", "cancelling"].includes(
+      task.status,
+    ),
   ).length;
   return (
     <aside className={`upload-center ${props.open ? "open" : ""}`}>
@@ -2186,6 +2253,8 @@ function UploadCenter(props: {
                     <span>
                       {task.status === "complete"
                         ? "上传完成"
+                        : task.status === "cancelling"
+                          ? "正在取消并清理已上传分片"
                         : task.status === "error"
                           ? task.error || "上传失败"
                           : `${progress.toFixed(0)}% · ${formatSpeed(task.speed)}`}
@@ -2213,6 +2282,25 @@ function UploadCenter(props: {
                     <button onClick={() => props.onResume(task.id)} title="重试">
                       <RotateCcw size={15} />
                     </button>
+                  )}
+                  {[
+                    "queued",
+                    "uploading",
+                    "paused",
+                    "retrying",
+                    "error",
+                  ].includes(task.status) && (
+                    <button
+                      className="cancel-upload"
+                      onClick={() => props.onCancel(task.id)}
+                      title="取消上传并删除已上传分片和任务记录"
+                      aria-label={`取消上传 ${task.displayName}`}
+                    >
+                      <X size={15} />
+                    </button>
+                  )}
+                  {task.status === "cancelling" && (
+                    <LoaderCircle className="spin" size={16} />
                   )}
                   {task.status === "complete" && <Check size={16} />}
                 </div>
