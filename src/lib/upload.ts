@@ -32,7 +32,20 @@ interface MultipartResponse {
   url?: string;
   urls?: Array<{ PartNumber: number; url: string }>;
   parts?: UploadedPart[];
+  code?: string;
   error?: string;
+}
+
+class MultipartRequestError extends Error {
+  status: number;
+  code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "MultipartRequestError";
+    this.status = status;
+    this.code = code;
+  }
 }
 
 interface UploadTuning {
@@ -41,9 +54,18 @@ interface UploadTuning {
 }
 
 export interface ResumableUpload {
+  resumed: boolean;
   start: () => void;
   abort: () => Promise<void>;
   cancel: () => Promise<void>;
+}
+
+export interface PendingUploadSession {
+  localStorageKey: string;
+  displayName: string;
+  fileSize: number;
+  lastModified: number;
+  parentId: number | null;
 }
 
 export interface ResumableUploadOptions {
@@ -56,8 +78,130 @@ export interface ResumableUploadOptions {
   onError: (error: Error) => void;
 }
 
-function sessionKey(options: ResumableUploadOptions) {
+function sessionKey(
+  options: Pick<
+    ResumableUploadOptions,
+    "file" | "displayName" | "userId" | "parentId"
+  >,
+) {
   return `${SESSION_PREFIX}${options.userId}:${options.parentId ?? "root"}:${encodeURIComponent(options.displayName)}:${options.file.size}:${options.file.lastModified}`;
+}
+
+function validStoredSession(value: unknown): value is StoredSession {
+  if (!value || typeof value !== "object") return false;
+  const stored = value as StoredSession;
+  return (
+    typeof stored.key === "string" &&
+    Boolean(stored.key) &&
+    typeof stored.uploadId === "string" &&
+    Boolean(stored.uploadId) &&
+    (stored.partSize === undefined ||
+      (Number.isSafeInteger(stored.partSize) &&
+        Number(stored.partSize) >= MIN_PART_SIZE &&
+        Number(stored.partSize) <= MAX_PART_SIZE))
+  );
+}
+
+function readStoredSession(key: string) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) ?? "null") as unknown;
+    if (validStoredSession(parsed)) return parsed;
+  } catch {
+    // Invalid records are removed below.
+  }
+  localStorage.removeItem(key);
+  return null;
+}
+
+export function hasStoredResumableUpload(
+  options: Pick<
+    ResumableUploadOptions,
+    "file" | "displayName" | "userId" | "parentId"
+  >,
+) {
+  return Boolean(readStoredSession(sessionKey(options)));
+}
+
+export function listPendingUploadSessions(userId: string): PendingUploadSession[] {
+  const ownerPrefix = `${SESSION_PREFIX}${userId}:`;
+  const sessions: PendingUploadSession[] = [];
+
+  const keys = Array.from(
+    { length: localStorage.length },
+    (_, index) => localStorage.key(index),
+  );
+  for (const key of keys) {
+    if (!key?.startsWith(ownerPrefix) || !readStoredSession(key)) continue;
+
+    const identity = key.slice(ownerPrefix.length);
+    const parentSeparator = identity.indexOf(":");
+    const lastModifiedSeparator = identity.lastIndexOf(":");
+    const sizeSeparator = identity.lastIndexOf(":", lastModifiedSeparator - 1);
+    if (
+      parentSeparator < 0 ||
+      sizeSeparator <= parentSeparator ||
+      lastModifiedSeparator <= sizeSeparator
+    ) {
+      continue;
+    }
+
+    const parentValue = identity.slice(0, parentSeparator);
+    const fileSize = Number(
+      identity.slice(sizeSeparator + 1, lastModifiedSeparator),
+    );
+    const lastModified = Number(identity.slice(lastModifiedSeparator + 1));
+    let displayName = "";
+    try {
+      displayName = decodeURIComponent(
+        identity.slice(parentSeparator + 1, sizeSeparator),
+      );
+    } catch {
+      continue;
+    }
+    if (
+      !displayName ||
+      !Number.isSafeInteger(fileSize) ||
+      fileSize < 0 ||
+      !Number.isSafeInteger(lastModified) ||
+      lastModified < 0
+    ) {
+      continue;
+    }
+    const parentId = parentValue === "root" ? null : Number(parentValue);
+    if (
+      parentId !== null &&
+      (!Number.isSafeInteger(parentId) || parentId <= 0)
+    ) {
+      continue;
+    }
+    sessions.push({
+      localStorageKey: key,
+      displayName,
+      fileSize,
+      lastModified,
+      parentId,
+    });
+  }
+
+  return sessions;
+}
+
+export async function cancelStoredResumableUpload(
+  options: Pick<
+    ResumableUploadOptions,
+    "file" | "displayName" | "userId" | "parentId"
+  >,
+) {
+  const key = sessionKey(options);
+  const stored = readStoredSession(key);
+  if (!stored) return false;
+  await multipartRequest({
+    action: "abort",
+    key: stored.key,
+    uploadId: stored.uploadId,
+  });
+  localStorage.removeItem(key);
+  return true;
 }
 
 async function accessToken() {
@@ -85,7 +229,11 @@ async function multipartRequest(
   });
   const payload = (await response.json().catch(() => ({}))) as MultipartResponse;
   if (!response.ok) {
-    throw new Error(payload.error || `R2 请求失败（${response.status}）`);
+    throw new MultipartRequestError(
+      payload.error || `R2 请求失败（${response.status}）`,
+      response.status,
+      payload.code,
+    );
   }
   return payload;
 }
@@ -169,26 +317,7 @@ export async function createResumableUpload(
     Math.ceil(options.file.size / MAX_PARTS / (1024 * 1024)) * 1024 * 1024,
   );
   const key = sessionKey(options);
-  let stored: StoredSession | null = null;
-  try {
-    stored = JSON.parse(localStorage.getItem(key) ?? "null") as StoredSession | null;
-  } catch {
-    localStorage.removeItem(key);
-  }
-  if (
-    stored &&
-    (typeof stored.key !== "string" ||
-      !stored.key ||
-      typeof stored.uploadId !== "string" ||
-      !stored.uploadId ||
-      (stored.partSize !== undefined &&
-        (!Number.isSafeInteger(stored.partSize) ||
-          stored.partSize < MIN_PART_SIZE ||
-          stored.partSize > MAX_PART_SIZE)))
-  ) {
-    stored = null;
-    localStorage.removeItem(key);
-  }
+  let stored: StoredSession | null = readStoredSession(key);
   let parts: UploadedPart[] = [];
   if (stored?.key && stored.uploadId) {
     try {
@@ -205,12 +334,24 @@ export async function createResumableUpload(
             Number(part.PartNumber) > 0,
         )
         .sort((left, right) => left.PartNumber - right.PartNumber);
-    } catch {
-      stored = null;
-      localStorage.removeItem(key);
+    } catch (error) {
+      if (
+        error instanceof MultipartRequestError &&
+        error.code === "UPLOAD_SESSION_MISSING"
+      ) {
+        stored = null;
+        localStorage.removeItem(key);
+      } else {
+        throw new Error(
+          `暂时无法检查断点上传状态，请稍后重试：${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
   }
 
+  const resumed = Boolean(stored);
   let partSize = stored?.partSize ?? (stored ? LEGACY_PART_SIZE : preferredPartSize);
   if (!stored) {
     const created = await multipartRequest({
@@ -495,6 +636,7 @@ export async function createResumableUpload(
   }
 
   return {
+    resumed,
     start() {
       if (currentRun || cancelled) return;
       const promise = run();

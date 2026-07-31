@@ -1000,6 +1000,11 @@ body:has(.drive-shell) .topbar-actions {
   background: #ecefea;
 }
 
+.toolbar-left .resume-upload-hint {
+  color: var(--green-2);
+  background: var(--green-soft);
+}
+
 .toolbar-hint {
   display: flex;
   align-items: center;
@@ -2160,11 +2165,19 @@ body.touch-drag-active {
   }
 
   .workspace-actions .workspace-folder-action,
-  .workspace-actions .primary-button {
+  .workspace-actions .workspace-upload-action {
     width: 41px;
     height: 41px;
+    display: grid;
+    place-items: center;
+    gap: 0;
     padding: 0;
     font-size: 0;
+  }
+
+  .workspace-actions .workspace-folder-action svg,
+  .workspace-actions .workspace-upload-action svg {
+    margin: 0;
   }
 
   .desktop-drag-hint {

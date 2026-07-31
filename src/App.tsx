@@ -76,6 +76,7 @@ import {
   formatBytes,
   formatDate,
   formatQuotaBytes,
+  formatRemainingTime,
   formatSpeed,
   initials,
 } from "./lib/format";
@@ -86,7 +87,10 @@ import {
   supabase,
 } from "./lib/supabase";
 import {
+  cancelStoredResumableUpload,
   createResumableUpload,
+  hasStoredResumableUpload,
+  listPendingUploadSessions,
   type ResumableUpload,
 } from "./lib/upload";
 import type {
@@ -644,22 +648,6 @@ function AuthView() {
                 />
               </label>
             )}
-            {captchaRequired && (
-              <div className="captcha-field">
-                <span>人机验证</span>
-                {turnstileSiteKey ? (
-                  <TurnstileWidget
-                    siteKey={turnstileSiteKey}
-                    resetKey={captchaResetKey}
-                    onToken={setCaptchaToken}
-                  />
-                ) : (
-                  <p className="captcha-unconfigured">
-                    尚未配置 Turnstile 站点密钥，暂时无法注册。
-                  </p>
-                )}
-              </div>
-            )}
             {mode === "signup" && signupStep === "verification" && (
               <label>
                 <span>{signupCodeLength} 位验证码</span>
@@ -701,6 +689,22 @@ function AuthView() {
                   required
                 />
               </label>
+            )}
+            {captchaRequired && (
+              <div className="captcha-field">
+                <span>人机验证</span>
+                {turnstileSiteKey ? (
+                  <TurnstileWidget
+                    siteKey={turnstileSiteKey}
+                    resetKey={captchaResetKey}
+                    onToken={setCaptchaToken}
+                  />
+                ) : (
+                  <p className="captcha-unconfigured">
+                    尚未配置 Turnstile 站点密钥，暂时无法继续。
+                  </p>
+                )}
+              </div>
             )}
             <button
               className="primary-button auth-submit"
@@ -826,6 +830,9 @@ function DriveApp({
   >(null);
   const [folders, setFolders] = useState<DriveItem[]>([]);
   const [tasks, setTasks] = useState<UploadTask[]>([]);
+  const [pendingResumes, setPendingResumes] = useState(() =>
+    listPendingUploadSessions(userId),
+  );
   const [uploadPanelOpen, setUploadPanelOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -900,6 +907,15 @@ function DriveApp({
     [],
   );
 
+  useEffect(
+    () => () => {
+      for (const upload of uploads.current.values()) {
+        void upload.abort();
+      }
+    },
+    [],
+  );
+
   function chooseCategory(next: CategoryFilter) {
     setCategory(next);
     setQuery("");
@@ -922,25 +938,59 @@ function DriveApp({
       setToast("正在读取可用存储空间，请稍后再试");
       return;
     }
-    const uploadLimit = Math.min(maxFileSizeBytes, quota.remaining_bytes);
-    const tooLarge = incoming.find((file) => file.size > uploadLimit);
+    const tooLarge = incoming.find((file) => file.size > maxFileSizeBytes);
     if (tooLarge) {
-      setToast(`${tooLarge.name} 超过当前可用空间，无法上传`);
+      setToast(`${tooLarge.name} 超过浏览器可处理的文件大小，无法上传`);
       return;
     }
-    const totalSize = incoming.reduce((sum, file) => sum + file.size, 0);
-    if (totalSize > quota.remaining_bytes) {
+
+    const destinationParentId = currentFolder?.id ?? null;
+    const pendingElsewhere = incoming.find((file) =>
+      pendingResumes.some(
+        (pending) =>
+          pending.fileSize === file.size &&
+          pending.lastModified === file.lastModified &&
+          pending.parentId !== destinationParentId,
+      ),
+    );
+    if (pendingElsewhere) {
       setToast(
-        `所选文件共 ${formatQuotaBytes(totalSize)}，当前仅剩 ${formatQuotaBytes(quota.remaining_bytes)}`,
+        `${pendingElsewhere.name} 在原文件夹中有未完成上传，请返回原文件夹后重新选择该文件继续`,
       );
       return;
     }
 
     const names = new Set(items.map((item) => item.name.toLocaleLowerCase()));
-    const newTasks = incoming.map((file) => ({
+    const candidates = incoming.map((file) => {
+      const displayName = uniqueDisplayName(file, names);
+      return {
+        file,
+        displayName,
+        resumesExisting: hasStoredResumableUpload({
+          file,
+          displayName,
+          userId,
+          parentId: destinationParentId,
+        }),
+      };
+    });
+    const newReservationSize = candidates.reduce(
+      (sum, candidate) =>
+        sum + (candidate.resumesExisting ? 0 : candidate.file.size),
+      0,
+    );
+    if (newReservationSize > quota.remaining_bytes) {
+      setToast(
+        `新上传文件共 ${formatQuotaBytes(newReservationSize)}，当前仅剩 ${formatQuotaBytes(quota.remaining_bytes)}`,
+      );
+      return;
+    }
+
+    const newTasks = candidates.map(({ file, displayName }) => ({
       id: crypto.randomUUID(),
       file,
-      displayName: uniqueDisplayName(file, names),
+      displayName,
+      parentId: destinationParentId,
       status: "queued" as const,
       uploaded: 0,
       total: file.size,
@@ -960,7 +1010,7 @@ function DriveApp({
         file: task.file,
         displayName: task.displayName,
         userId,
-        parentId: currentFolder?.id ?? null,
+        parentId: task.parentId,
         onProgress: (uploaded, total) => {
           if (cancelledTaskIds.current.has(task.id)) return;
           const now = performance.now();
@@ -1038,6 +1088,20 @@ function DriveApp({
         return;
       }
       uploads.current.set(task.id, upload);
+      setPendingResumes((current) =>
+        current.filter(
+          (pending) =>
+            !(
+              pending.displayName === task.displayName &&
+              pending.fileSize === task.file.size &&
+              pending.lastModified === task.file.lastModified &&
+              pending.parentId === task.parentId
+            ),
+        ),
+      );
+      if (upload.resumed) {
+        setToast(`${task.displayName} 已从断点继续上传`);
+      }
       setTasks((current) =>
         current.map((item) =>
           item.id === task.id ? { ...item, status: "uploading" } : item,
@@ -1069,7 +1133,21 @@ function DriveApp({
   }
 
   function resumeTask(id: string) {
-    uploads.current.get(id)?.start();
+    const upload = uploads.current.get(id);
+    if (!upload) {
+      const task = tasks.find((candidate) => candidate.id === id);
+      if (!task) return;
+      setTasks((current) =>
+        current.map((candidate) =>
+          candidate.id === id
+            ? { ...candidate, status: "retrying", error: undefined, speed: 0 }
+            : candidate,
+        ),
+      );
+      void prepareAndStart(task);
+      return;
+    }
+    upload.start();
     setTasks((current) =>
       current.map((task) =>
         task.id === id
@@ -1084,6 +1162,7 @@ function DriveApp({
     uploads.current.delete(id);
     speedSamples.current.delete(id);
     setTasks((current) => current.filter((task) => task.id !== id));
+    setPendingResumes(listPendingUploadSessions(userId));
     void refreshRef.current();
   }
 
@@ -1111,7 +1190,25 @@ function DriveApp({
       ),
     );
     const upload = uploads.current.get(id);
-    if (!upload) return;
+    if (!upload) {
+      const task = tasks.find((candidate) => candidate.id === id);
+      if (!task) {
+        finishCancelledTask(id);
+        return;
+      }
+      try {
+        await cancelStoredResumableUpload({
+          file: task.file,
+          displayName: task.displayName,
+          userId,
+          parentId: task.parentId,
+        });
+        finishCancelledTask(id);
+      } catch (cancelError) {
+        markCancelFailed(id, cancelError);
+      }
+      return;
+    }
 
     try {
       await upload.cancel();
@@ -1706,14 +1803,27 @@ function DriveApp({
                 </>
               ) : (
                 <>
-                  <span className="toolbar-hint desktop-drag-hint">
-                    <UploadCloud size={16} />
-                    可将文件拖到此处上传
-                  </span>
-                  <span className="toolbar-hint mobile-drag-hint">
-                    <Move size={16} />
-                    长按文件并拖到文件夹即可移动
-                  </span>
+                  {pendingResumes.length > 0 ? (
+                    <button
+                      className="resume-upload-hint"
+                      onClick={() => fileInput.current?.click()}
+                      title="重新选择原文件后，将自动跳过已完成分片"
+                    >
+                      <RotateCcw size={16} />
+                      发现 {pendingResumes.length} 个未完成上传，选择原文件继续
+                    </button>
+                  ) : (
+                    <>
+                      <span className="toolbar-hint desktop-drag-hint">
+                        <UploadCloud size={16} />
+                        可将文件拖到此处上传
+                      </span>
+                      <span className="toolbar-hint mobile-drag-hint">
+                        <Move size={16} />
+                        长按文件并拖到文件夹即可移动
+                      </span>
+                    </>
+                  )}
                 </>
               )}
             </div>
@@ -2242,6 +2352,12 @@ function UploadCenter(props: {
           {props.tasks.map((task) => {
             const progress =
               task.total > 0 ? Math.min(100, (task.uploaded / task.total) * 100) : 0;
+            const remainingTime =
+              task.speed > 0
+                ? formatRemainingTime(
+                    Math.max(0, task.total - task.uploaded) / task.speed,
+                  )
+                : "计算中";
             return (
               <div className="upload-task" key={task.id}>
                 <div className="upload-file-icon">
@@ -2257,7 +2373,11 @@ function UploadCenter(props: {
                           ? "正在取消并清理已上传分片"
                         : task.status === "error"
                           ? task.error || "上传失败"
-                          : `${progress.toFixed(0)}% · ${formatSpeed(task.speed)}`}
+                          : task.status === "paused"
+                            ? `${progress.toFixed(0)}% · 已暂停`
+                            : task.status === "queued"
+                              ? `${progress.toFixed(0)}% · 等待上传`
+                              : `${progress.toFixed(0)}% · ${formatSpeed(task.speed)} · 预计剩余 ${remainingTime}`}
                     </span>
                     <span>
                       {formatBytes(task.uploaded)} / {formatBytes(task.total)}

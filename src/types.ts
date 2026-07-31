@@ -47,6 +47,7 @@ export interface UploadTask {
   id: string;
   file: File;
   displayName: string;
+  parentId: number | null;
   status: UploadStatus;
   uploaded: number;
   total: number;

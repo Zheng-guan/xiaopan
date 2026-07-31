@@ -39,6 +39,22 @@ interface MultipartBody {
   parts?: Array<{ ETag: string; PartNumber: number }>;
 }
 
+function isMissingMultipartUpload(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as {
+    name?: string;
+    Code?: string;
+    code?: string;
+    $metadata?: { httpStatusCode?: number };
+  };
+  return (
+    candidate.name === "NoSuchUpload" ||
+    candidate.Code === "NoSuchUpload" ||
+    candidate.code === "NoSuchUpload" ||
+    candidate.$metadata?.httpStatusCode === 404
+  );
+}
+
 export default async (request: Request, _context: Context) => {
   const maxParts = 10_000;
   const maxSignedPartsPerRequest = 16;
@@ -130,21 +146,36 @@ export default async (request: Request, _context: Context) => {
     }
 
     if (body.action === "list") {
-      const result = await r2.client.send(
-        new ListPartsCommand({
-          Bucket: r2.environment.bucket,
-          Key: body.key,
-          UploadId: body.uploadId,
-          MaxParts: maxParts,
-        }),
-      );
-      return json({
-        parts: (result.Parts ?? []).map((part) => ({
-          ETag: part.ETag,
-          PartNumber: part.PartNumber,
-          Size: part.Size,
-        })),
-      });
+      try {
+        const result = await r2.client.send(
+          new ListPartsCommand({
+            Bucket: r2.environment.bucket,
+            Key: body.key,
+            UploadId: body.uploadId,
+            MaxParts: maxParts,
+          }),
+        );
+        return json({
+          parts: (result.Parts ?? []).map((part) => ({
+            ETag: part.ETag,
+            PartNumber: part.PartNumber,
+            Size: part.Size,
+          })),
+        });
+      } catch (error) {
+        if (!isMissingMultipartUpload(error)) throw error;
+        await database.rpc("release_drive_upload", {
+          p_user_id: authentication.user.id,
+          p_storage_path: body.key,
+        });
+        return json(
+          {
+            code: "UPLOAD_SESSION_MISSING",
+            error: "The previous multipart upload no longer exists",
+          },
+          404,
+        );
+      }
     }
 
     if (body.action === "sign-part") {
@@ -300,13 +331,17 @@ export default async (request: Request, _context: Context) => {
     }
 
     if (body.action === "abort") {
-      await r2.client.send(
-        new AbortMultipartUploadCommand({
-          Bucket: r2.environment.bucket,
-          Key: body.key,
-          UploadId: body.uploadId,
-        }),
-      );
+      try {
+        await r2.client.send(
+          new AbortMultipartUploadCommand({
+            Bucket: r2.environment.bucket,
+            Key: body.key,
+            UploadId: body.uploadId,
+          }),
+        );
+      } catch (error) {
+        if (!isMissingMultipartUpload(error)) throw error;
+      }
       await database.rpc("release_drive_upload", {
         p_user_id: authentication.user.id,
         p_storage_path: body.key,
