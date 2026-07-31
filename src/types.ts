@@ -55,6 +55,25 @@ export interface UploadTask {
   error?: string;
 }
 
+export type DownloadStatus =
+  | "preparing"
+  | "downloading"
+  | "fallback"
+  | "complete"
+  | "cancelled"
+  | "error";
+
+export interface DownloadTask {
+  id: string;
+  item: DriveItem;
+  status: DownloadStatus;
+  downloaded: number;
+  total: number;
+  speed: number;
+  concurrency: number;
+  error?: string;
+}
+
 export interface AdminUserSummary {
   id: string;
   email: string;

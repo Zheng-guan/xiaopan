@@ -81,6 +81,12 @@ import {
   initials,
 } from "./lib/format";
 import {
+  cancelAdaptiveDownload,
+  startAdaptiveDownload,
+  startDirectDownload,
+  subscribeAdaptiveDownloads,
+} from "./lib/download";
+import {
   isSupabaseConfigured,
   maxFileSizeBytes,
   registrationEmailAvailable,
@@ -95,6 +101,7 @@ import {
 } from "./lib/upload";
 import type {
   CategoryFilter,
+  DownloadTask,
   DriveItem,
   DriveQuota,
   DriveUsage,
@@ -830,6 +837,7 @@ function DriveApp({
   >(null);
   const [folders, setFolders] = useState<DriveItem[]>([]);
   const [tasks, setTasks] = useState<UploadTask[]>([]);
+  const [downloadTasks, setDownloadTasks] = useState<DownloadTask[]>([]);
   const [pendingResumes, setPendingResumes] = useState(() =>
     listPendingUploadSessions(userId),
   );
@@ -838,6 +846,7 @@ function DriveApp({
   const fileInput = useRef<HTMLInputElement>(null);
   const uploads = useRef(new Map<string, ResumableUpload>());
   const cancelledTaskIds = useRef(new Set<string>());
+  const cancelledDownloadIds = useRef(new Set<string>());
   const dragTargets = useRef<DriveItem[]>([]);
   const dropTargetRef = useRef<DropTargetKey>(null);
   const touchDragSession = useRef<TouchDragSession | null>(null);
@@ -891,6 +900,45 @@ function DriveApp({
     const timer = window.setTimeout(() => setToast(null), 3600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(
+    () =>
+      subscribeAdaptiveDownloads((event) => {
+        setDownloadTasks((current) =>
+          current.map((task) => {
+            if (task.id !== event.id) return task;
+            if (event.type === "progress") {
+              return {
+                ...task,
+                status: "downloading",
+                downloaded: event.downloaded,
+                total: event.total,
+                speed: event.speed,
+                concurrency: event.concurrency,
+                error: undefined,
+              };
+            }
+            if (event.type === "complete") {
+              return {
+                ...task,
+                status: "complete",
+                downloaded: task.total,
+                speed: 0,
+              };
+            }
+            if (event.type === "fallback") {
+              return { ...task, status: "fallback", speed: 0 };
+            }
+            if (event.type === "cancelled") {
+              return { ...task, status: "cancelled", speed: 0 };
+            }
+            return { ...task, status: "error", speed: 0, error: event.error };
+          }),
+        );
+        if (event.type === "error") setToast(event.error);
+      }),
+    [],
+  );
 
   useEffect(() => {
     document.body.classList.toggle("touch-drag-active", Boolean(touchDragPreview));
@@ -1218,26 +1266,87 @@ function DriveApp({
     }
   }
 
-  async function download(item: DriveItem) {
+  async function download(item: DriveItem, retryTaskId?: string) {
+    const activeTask = downloadTasks.find(
+      (task) =>
+        task.item.id === item.id &&
+        ["preparing", "downloading"].includes(task.status),
+    );
+    if (!retryTaskId && activeTask) {
+      setUploadPanelOpen(true);
+      return;
+    }
+
+    const id = retryTaskId ?? crypto.randomUUID();
+    cancelledDownloadIds.current.delete(id);
+    const nextTask: DownloadTask = {
+      id,
+      item,
+      status: "preparing",
+      downloaded: 0,
+      total: item.size,
+      speed: 0,
+      concurrency: 0,
+    };
+    setDownloadTasks((current) =>
+      retryTaskId
+        ? current.map((task) => (task.id === id ? nextTask : task))
+        : [nextTask, ...current],
+    );
+    setUploadPanelOpen(true);
+
     try {
       const url = await signedDownloadUrl(item, session.access_token);
-      const usesCoarsePointer =
-        window.matchMedia?.("(pointer: coarse)").matches ||
-        window.navigator.maxTouchPoints > 0;
-      if (usesCoarsePointer) {
-        window.location.assign(url);
+      if (cancelledDownloadIds.current.has(id)) return;
+      setDownloadTasks((current) =>
+        current.map((task) =>
+          task.id === id ? { ...task, status: "downloading" } : task,
+        ),
+      );
+      const adaptive = await startAdaptiveDownload({
+        id,
+        url,
+        fileName: item.name,
+        size: item.size,
+        mimeType: item.mime_type,
+      });
+      if (cancelledDownloadIds.current.has(id)) {
+        await cancelAdaptiveDownload(id);
         return;
       }
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = item.name;
-      anchor.rel = "noopener";
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
+      if (!adaptive) {
+        startDirectDownload(url, item.name);
+        setDownloadTasks((current) =>
+          current.map((task) =>
+            task.id === id ? { ...task, status: "fallback", speed: 0 } : task,
+          ),
+        );
+      }
     } catch (downloadError) {
-      setToast(messageFrom(downloadError));
+      if (cancelledDownloadIds.current.has(id)) return;
+      const error = messageFrom(downloadError);
+      setDownloadTasks((current) =>
+        current.map((task) =>
+          task.id === id ? { ...task, status: "error", speed: 0, error } : task,
+        ),
+      );
+      setToast(error);
     }
+  }
+
+  function cancelDownload(id: string) {
+    cancelledDownloadIds.current.add(id);
+    void cancelAdaptiveDownload(id);
+    setDownloadTasks((current) =>
+      current.map((task) =>
+        task.id === id ? { ...task, status: "cancelled", speed: 0 } : task,
+      ),
+    );
+  }
+
+  function retryDownload(id: string) {
+    const task = downloadTasks.find((candidate) => candidate.id === id);
+    if (task) void download(task.item, id);
   }
 
   function toggleSelection(id: number) {
@@ -2109,22 +2218,30 @@ function DriveApp({
         </div>
       )}
 
-      {tasks.length > 0 && (
+      {(tasks.length > 0 || downloadTasks.length > 0) && (
         <UploadCenter
           tasks={tasks}
+          downloadTasks={downloadTasks}
           open={uploadPanelOpen}
           onToggle={() => setUploadPanelOpen((value) => !value)}
           onPause={(id) => void pauseTask(id)}
           onResume={resumeTask}
           onCancel={(id) => void cancelTask(id)}
-          onClear={() =>
+          onCancelDownload={cancelDownload}
+          onRetryDownload={retryDownload}
+          onClear={() => {
             setTasks((current) =>
               current.filter(
                 (task) =>
                   task.status !== "complete" && task.status !== "error",
               ),
-            )
-          }
+            );
+            setDownloadTasks((current) =>
+              current.filter((task) =>
+                ["preparing", "downloading"].includes(task.status),
+              ),
+            );
+          }}
         />
       )}
 
@@ -2326,24 +2443,29 @@ function FileRow(props: {
 
 function UploadCenter(props: {
   tasks: UploadTask[];
+  downloadTasks: DownloadTask[];
   open: boolean;
   onToggle: () => void;
   onPause: (id: string) => void;
   onResume: (id: string) => void;
   onCancel: (id: string) => void;
+  onCancelDownload: (id: string) => void;
+  onRetryDownload: (id: string) => void;
   onClear: () => void;
 }) {
-  const active = props.tasks.filter((task) =>
-    ["queued", "uploading", "paused", "retrying", "cancelling"].includes(
-      task.status,
-    ),
+  const activeUploads = props.tasks.filter((task) =>
+    ["queued", "uploading", "paused", "retrying", "cancelling"].includes(task.status),
   ).length;
+  const activeDownloads = props.downloadTasks.filter((task) =>
+    ["preparing", "downloading"].includes(task.status),
+  ).length;
+  const active = activeUploads + activeDownloads;
   return (
     <aside className={`upload-center ${props.open ? "open" : ""}`}>
       <button className="upload-center-head" onClick={props.onToggle}>
         <span>
-          <UploadCloud size={18} />
-          <strong>{active ? `正在上传 ${active} 项` : "上传任务"}</strong>
+          <Gauge size={18} />
+          <strong>{active ? `正在传输 ${active} 项` : "传输任务"}</strong>
         </span>
         <ChevronDown size={17} />
       </button>
@@ -2423,6 +2545,72 @@ function UploadCenter(props: {
                     <LoaderCircle className="spin" size={16} />
                   )}
                   {task.status === "complete" && <Check size={16} />}
+                </div>
+              </div>
+            );
+          })}
+          {props.downloadTasks.map((task) => {
+            const progress =
+              task.total > 0
+                ? Math.min(100, (task.downloaded / task.total) * 100)
+                : 0;
+            const remainingTime =
+              task.speed > 0
+                ? formatRemainingTime(
+                    Math.max(0, task.total - task.downloaded) / task.speed,
+                  )
+                : "计算中";
+            return (
+              <div className="upload-task download-task" key={task.id}>
+                <div className="upload-file-icon">
+                  <Download size={18} />
+                </div>
+                <div className="upload-task-main">
+                  <strong title={task.item.name}>{task.item.name}</strong>
+                  <div className="task-meta">
+                    <span>
+                      {task.status === "complete"
+                        ? "下载完成"
+                        : task.status === "fallback"
+                          ? "已转为浏览器普通下载"
+                          : task.status === "cancelled"
+                            ? "下载已取消"
+                            : task.status === "error"
+                              ? task.error || "下载失败"
+                              : task.status === "preparing"
+                                ? "正在准备安全下载链接"
+                                : `${progress.toFixed(0)}% · ${formatSpeed(task.speed)} · ${task.concurrency} 路并发 · 预计剩余 ${remainingTime}`}
+                    </span>
+                    <span>
+                      {formatBytes(task.downloaded)} / {formatBytes(task.total)}
+                    </span>
+                  </div>
+                  <div className={`task-track ${task.status}`}>
+                    <span style={{ width: `${progress}%` }} />
+                  </div>
+                </div>
+                <div className="task-action">
+                  {["preparing", "downloading"].includes(task.status) && (
+                    <button
+                      className="cancel-upload"
+                      onClick={() => props.onCancelDownload(task.id)}
+                      title="取消下载"
+                      aria-label={`取消下载 ${task.item.name}`}
+                    >
+                      <X size={15} />
+                    </button>
+                  )}
+                  {["error", "cancelled"].includes(task.status) && (
+                    <button
+                      onClick={() => props.onRetryDownload(task.id)}
+                      title="重新下载"
+                    >
+                      <RotateCcw size={15} />
+                    </button>
+                  )}
+                  {["complete", "fallback"].includes(task.status) && (
+                    <Check size={16} />
+                  )}
                 </div>
               </div>
             );

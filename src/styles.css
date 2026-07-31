@@ -1525,12 +1525,17 @@ body.touch-drag-active {
   height: 3px;
 }
 
-.task-track.complete span {
+.task-track.complete span,
+.task-track.fallback span {
   background: #48a06d;
 }
 
 .task-track.error span {
   background: var(--danger);
+}
+
+.task-track.cancelled span {
+  background: var(--subtle);
 }
 
 .task-action {
@@ -3244,6 +3249,22 @@ body.touch-drag-active {
   text-decoration: none;
 }
 
+.public-download-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.public-download-control small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.public-download-control .download-error {
+  color: var(--danger);
+}
+
 .public-share-card > footer {
   margin-top: 32px;
   padding-top: 19px;
@@ -3465,6 +3486,10 @@ body.touch-drag-active {
   }
 
   .public-share-actions .primary-button {
+    width: 100%;
+  }
+
+  .public-download-control {
     width: 100%;
   }
 }

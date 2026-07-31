@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Check,
   CircleAlert,
@@ -11,8 +11,15 @@ import {
   LoaderCircle,
   Quote,
   ShieldCheck,
+  X,
 } from "lucide-react";
-import { formatBytes, formatDate } from "./lib/format";
+import {
+  cancelAdaptiveDownload,
+  startAdaptiveDownload,
+  startDirectDownload,
+  subscribeAdaptiveDownloads,
+} from "./lib/download";
+import { formatBytes, formatDate, formatRemainingTime, formatSpeed } from "./lib/format";
 import { getPublicFileDownload, getPublicShare } from "./lib/shares";
 import type { PublicShare } from "./types";
 
@@ -26,7 +33,15 @@ export default function PublicShareView({ token }: { token: string }) {
   const [share, setShare] = useState<PublicShare | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState({
+    downloaded: 0,
+    total: 0,
+    speed: 0,
+    concurrency: 0,
+  });
   const [copied, setCopied] = useState(false);
+  const downloadId = useRef<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -41,6 +56,78 @@ export default function PublicShareView({ token }: { token: string }) {
       active = false;
     };
   }, [token]);
+
+  useEffect(
+    () =>
+      subscribeAdaptiveDownloads((event) => {
+        if (event.id !== downloadId.current) return;
+        if (event.type === "progress") {
+          setDownloadProgress({
+            downloaded: event.downloaded,
+            total: event.total,
+            speed: event.speed,
+            concurrency: event.concurrency,
+          });
+        } else if (["complete", "fallback", "cancelled"].includes(event.type)) {
+          setDownloading(false);
+          downloadId.current = null;
+        } else if (event.type === "error") {
+          setDownloading(false);
+          setDownloadError(event.error);
+          downloadId.current = null;
+        }
+      }),
+    [],
+  );
+
+  async function toggleFileDownload() {
+    if (downloading && downloadId.current) {
+      const id = downloadId.current;
+      downloadId.current = null;
+      setDownloading(false);
+      await cancelAdaptiveDownload(id);
+      return;
+    }
+    if (!share?.file) return;
+
+    const id = crypto.randomUUID();
+    downloadId.current = id;
+    setDownloading(true);
+    setDownloadError(null);
+    setDownloadProgress({
+      downloaded: 0,
+      total: share.file.size,
+      speed: 0,
+      concurrency: 0,
+    });
+    try {
+      const url = await getPublicFileDownload(token);
+      if (downloadId.current !== id) return;
+      const adaptive = await startAdaptiveDownload({
+        id,
+        url,
+        fileName: share.file.name,
+        size: share.file.size,
+        mimeType: share.file.mimeType,
+      });
+      if (downloadId.current !== id) {
+        await cancelAdaptiveDownload(id);
+        return;
+      }
+      if (!adaptive) {
+        startDirectDownload(url, share.file.name);
+        setDownloading(false);
+        downloadId.current = null;
+      }
+    } catch (downloadFailure) {
+      if (downloadId.current !== id) return;
+      setDownloading(false);
+      downloadId.current = null;
+      setDownloadError(
+        downloadFailure instanceof Error ? downloadFailure.message : "下载失败",
+      );
+    }
+  }
 
   return (
     <main className="public-share-shell">
@@ -121,24 +208,26 @@ export default function PublicShareView({ token }: { token: string }) {
                 </a>
               )}
               {share.type === "file" && (
-                <button
-                  className="primary-button"
-                  disabled={downloading}
-                  onClick={() => {
-                    setDownloading(true);
-                    void getPublicFileDownload(token)
-                      .then((url) => {
-                        window.location.assign(url);
-                      })
-                      .catch((downloadError) =>
-                        setError(downloadError instanceof Error ? downloadError.message : "下载失败"),
-                      )
-                      .finally(() => setDownloading(false));
-                  }}
-                >
-                  {downloading ? <LoaderCircle className="spin" size={17} /> : <Download size={17} />}
-                  下载文件
-                </button>
+                <div className="public-download-control">
+                  <button className="primary-button" onClick={() => void toggleFileDownload()}>
+                    {downloading ? <X size={17} /> : <Download size={17} />}
+                    {downloading ? "取消下载" : "下载文件"}
+                  </button>
+                  {downloading && (
+                    <small>
+                      {downloadProgress.total > 0
+                        ? `${Math.min(100, (downloadProgress.downloaded / downloadProgress.total) * 100).toFixed(0)}% · `
+                        : ""}
+                      {formatSpeed(downloadProgress.speed)} · {downloadProgress.concurrency || 1} 路并发
+                      {downloadProgress.speed > 0 &&
+                        ` · 预计剩余 ${formatRemainingTime(
+                          (downloadProgress.total - downloadProgress.downloaded) /
+                            downloadProgress.speed,
+                        )}`}
+                    </small>
+                  )}
+                  {downloadError && <small className="download-error">{downloadError}</small>}
+                </div>
               )}
             </div>
             <footer>此内容由小盘安全分享 · 共查看 {share.viewCount} 次</footer>

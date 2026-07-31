@@ -247,7 +247,7 @@ export async function signedDownloadUrl(item: DriveItem, accessToken: string) {
   }
   const { data, error } = await supabase.storage
     .from(bucket)
-    .createSignedUrl(item.storage_path, 60, { download: item.name });
+    .createSignedUrl(item.storage_path, 6 * 60 * 60, { download: item.name });
   if (error) throw error;
   return data.signedUrl;
 }
