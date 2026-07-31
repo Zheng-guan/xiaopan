@@ -21,6 +21,7 @@ type MultipartAction =
   | "create"
   | "list"
   | "sign-part"
+  | "sign-parts"
   | "complete"
   | "abort"
   | "delete";
@@ -34,11 +35,13 @@ interface MultipartBody {
   key?: string;
   uploadId?: string;
   partNumber?: number;
+  partNumbers?: number[];
   parts?: Array<{ ETag: string; PartNumber: number }>;
 }
 
 export default async (request: Request, _context: Context) => {
   const maxParts = 10_000;
+  const maxSignedPartsPerRequest = 16;
   if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   const authentication = await authenticatedSupabase(bearerToken(request));
@@ -163,6 +166,45 @@ export default async (request: Request, _context: Context) => {
         { expiresIn: 3600 },
       );
       return json({ url, expiresIn: 3600 });
+    }
+
+    if (body.action === "sign-parts") {
+      if (
+        !Array.isArray(body.partNumbers) ||
+        body.partNumbers.length < 1 ||
+        body.partNumbers.length > maxSignedPartsPerRequest ||
+        body.partNumbers.some(
+          (partNumber) =>
+            !Number.isSafeInteger(partNumber) ||
+            partNumber < 1 ||
+            partNumber > maxParts,
+        ) ||
+        new Set(body.partNumbers).size !== body.partNumbers.length
+      ) {
+        return json(
+          {
+            error: `Provide 1-${maxSignedPartsPerRequest} unique valid part numbers`,
+          },
+          400,
+        );
+      }
+
+      const urls = await Promise.all(
+        body.partNumbers.map(async (partNumber) => ({
+          PartNumber: partNumber,
+          url: await getSignedUrl(
+            r2.client,
+            new UploadPartCommand({
+              Bucket: r2.environment.bucket,
+              Key: body.key,
+              UploadId: body.uploadId,
+              PartNumber: partNumber,
+            }),
+            { expiresIn: 3600 },
+          ),
+        })),
+      );
+      return json({ urls, expiresIn: 3600 });
     }
 
     if (body.action === "complete") {

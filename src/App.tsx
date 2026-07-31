@@ -562,7 +562,7 @@ function AuthView() {
             </div>
             <div>
               <strong>为不稳定网络而生</strong>
-              <span>10 MB 智能分片 · 自动重试 · 随时继续</span>
+              <span>16 MiB 并行分片 · 自动重试 · 随时继续</span>
             </div>
             <Gauge size={22} />
           </div>

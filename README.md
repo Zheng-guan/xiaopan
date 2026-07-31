@@ -25,7 +25,7 @@ Files are uploaded directly from the browser to Cloudflare R2 with server-signed
 - Private files and folders for every user
 - Folder navigation, list/grid views, search, sorting, and storage statistics
 - Drag-and-drop and multi-file uploads
-- Cloudflare R2 multipart uploads with adaptive 10 MiB-or-larger parts
+- Cloudflare R2 multipart uploads with 16 MiB-or-larger parts and adaptive parallelism
 - Pause/resume, retry, cancellation with partial-upload cleanup, upload progress, and live transfer speed
 - Short-lived signed download URLs and browser-streamed downloads
 - Rename, move, recursive delete, and multi-select operations
@@ -242,8 +242,10 @@ The administrator entry displays only a password field. The fixed email is used 
 
 New files upload directly from the browser to R2 through server-signed multipart URLs:
 
-- Base part size is **10 MiB**, increasing automatically before the 10,000-part limit.
-- The 10 MiB value is a multipart boundary, not a bandwidth throttle. File bytes go directly from the browser to R2; practical speed is governed by the user's uplink, browser, network route to Cloudflare, and the current sequential-part upload strategy.
+- New uploads use a base part size of **16 MiB**, increasing automatically before the 10,000-part limit. Existing resumable sessions created by older releases keep their original 10 MiB part size.
+- Uploads start with two concurrent parts and tune themselves from measured upload throughput rather than device type. Clean throughput gains increase concurrency gradually up to six; retries halve it, and a material throughput drop reduces it.
+- The signing endpoint issues up to 16 short-lived part URLs per authenticated request. File bytes still travel directly from the browser to R2, so batching reduces Netlify Function round trips without proxying upload traffic through Netlify.
+- The 16 MiB value is a multipart boundary, not a bandwidth throttle. Using R2's 5 MiB minimum for every part would increase signing, upload-part, and ETag operations without necessarily increasing total throughput.
 - Failed parts retry with fresh one-hour signed URLs.
 - Pause/resume state and completed part ETags are retained in R2. Re-select the same local file to continue after a refresh.
 - Cancelling a task aborts the R2 multipart upload, deletes its uploaded parts, releases the database quota reservation, removes the local resumable session, and clears the task record.
