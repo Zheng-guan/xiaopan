@@ -125,7 +125,7 @@ export default function TurnstileWidget(props: {
     <div className="turnstile-wrap">
       <div ref={containerRef} className="turnstile-widget" />
       {loadError && (
-        <small className="turnstile-error">
+        <small className="turnstile-error" role="alert" aria-live="assertive">
           人机验证加载失败，请检查网络或刷新页面后重试。
         </small>
       )}

@@ -133,7 +133,7 @@ export default function QuickTextCenter(props: {
         <div className="quick-text-account">
           <span className="avatar compact">{initials(props.session.user.email)}</span>
           <span>{props.session.user.email}</span>
-          <button className="icon-button" title="退出登录" onClick={() => void supabase.auth.signOut()}>
+          <button className="icon-button" title="退出登录" aria-label="退出登录" onClick={() => void supabase.auth.signOut()}>
             <LogOut size={17} />
           </button>
         </div>
@@ -167,10 +167,11 @@ export default function QuickTextCenter(props: {
                 <p>仅同一账号可见，不会自动公开分享。</p>
               </div>
             </div>
-            <form onSubmit={submit}>
+            <form onSubmit={submit} aria-busy={saving}>
               <textarea
                 value={content}
                 onChange={(event) => setContent(event.target.value)}
+                aria-label="要跨设备同步的文字"
                 maxLength={100000}
                 placeholder="在这里长按粘贴文字、网址、验证码、地址或一小段笔记……"
                 autoFocus
@@ -180,8 +181,8 @@ export default function QuickTextCenter(props: {
                 <span>{content.length.toLocaleString()} / 100,000 字</span>
                 <span>内容通过账号安全同步</span>
               </div>
-              {error && <div className="quick-text-message error">{error}</div>}
-              {notice && <div className="quick-text-message success"><Check size={16} />{notice}</div>}
+              {error && <div className="quick-text-message error" role="alert" aria-live="assertive">{error}</div>}
+              {notice && <div className="quick-text-message success" role="status" aria-live="polite"><Check size={16} />{notice}</div>}
               <button className="primary-button quick-text-save" disabled={saving || !content.trim()}>
                 {saving ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}
                 保存并同步
@@ -195,13 +196,13 @@ export default function QuickTextCenter(props: {
                 <h2>最近文字</h2>
                 <p>{items.length} 条记录，最新内容排在最上面。</p>
               </div>
-              <button className="icon-button" onClick={() => void load()} disabled={loading} title="刷新">
+              <button className="icon-button" onClick={() => void load()} disabled={loading} title="刷新" aria-label="刷新文字记录">
                 <RefreshCw className={loading ? "spin" : ""} size={17} />
               </button>
             </div>
 
             {loading && items.length === 0 ? (
-              <div className="quick-text-empty">
+              <div className="quick-text-empty" role="status" aria-live="polite">
                 <LoaderCircle className="spin" size={24} />
                 <span>正在同步文字</span>
               </div>
@@ -233,6 +234,7 @@ export default function QuickTextCenter(props: {
                       <button
                         className="primary-button"
                         onClick={() => void handleCopy(item)}
+                        aria-live="polite"
                       >
                         {copiedId === item.id ? <Check size={16} /> : <Copy size={16} />}
                         {copiedId === item.id ? "已复制" : "复制文字"}
@@ -240,6 +242,7 @@ export default function QuickTextCenter(props: {
                       <button
                         className="quick-text-delete"
                         title="删除文字"
+                        aria-label="删除这段文字"
                         disabled={deletingId === item.id}
                         onClick={() => {
                           if (!window.confirm("确定删除这段文字吗？")) return;

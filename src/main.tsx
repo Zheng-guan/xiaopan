@@ -1,6 +1,8 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import ErrorBoundary from "./ErrorBoundary";
+import NetworkStatus from "./NetworkStatus";
 import "./styles.css";
 
 if ("serviceWorker" in navigator) {
@@ -24,6 +26,9 @@ if ("serviceWorker" in navigator) {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+    <NetworkStatus />
   </StrictMode>,
 );

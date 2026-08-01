@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { AnimatePresence, motion } from "motion/react";
 import {
@@ -42,6 +42,11 @@ export default function AdminApp(props: {
   const [error, setError] = useState<string | null>(null);
   const [target, setTarget] = useState<AdminUserSummary | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const dialogRef = useRef<HTMLElement>(null);
+  const dialogReturnFocusRef = useRef<HTMLElement | null>(null);
+  const deletingRef = useRef(deleting);
+  const dialogTitleId = useId();
+  deletingRef.current = deleting;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -58,6 +63,57 @@ export default function AdminApp(props: {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!target || !dialogRef.current) return;
+    const dialog = dialogRef.current;
+    const selector =
+      "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])";
+    const focusableElements = () =>
+      Array.from(dialog.querySelectorAll<HTMLElement>(selector)).filter(
+        (element) => element.getClientRects().length > 0,
+      );
+    const frame = window.requestAnimationFrame(() => {
+      (focusableElements()[0] ?? dialog).focus({ preventScroll: true });
+    });
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !deletingRef.current) {
+        event.preventDefault();
+        setTarget(null);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const elements = focusableElements();
+      if (elements.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (!dialog.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+        return;
+      }
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", handleKeyDown);
+      const previousFocus = dialogReturnFocusRef.current;
+      if (previousFocus && document.contains(previousFocus)) {
+        previousFocus.focus({ preventScroll: true });
+      }
+    };
+  }, [target]);
 
   const users = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
@@ -94,7 +150,7 @@ export default function AdminApp(props: {
             <strong>管理员账户</strong>
             <small>超级管理员</small>
           </span>
-          <button className="icon-button" title="退出登录" onClick={() => void supabase.auth.signOut()}>
+          <button className="icon-button" title="退出登录" aria-label="退出登录" onClick={() => void supabase.auth.signOut()}>
             <LogOut size={17} />
           </button>
         </div>
@@ -118,14 +174,14 @@ export default function AdminApp(props: {
         </div>
 
         {error && (
-          <div className="admin-error">
+          <div className="admin-error" role="alert" aria-live="assertive">
             <span>{error}</span>
-            <button onClick={() => setError(null)}><X size={16} /></button>
+            <button onClick={() => setError(null)} aria-label="关闭错误提示"><X size={16} /></button>
           </div>
         )}
 
         {loading && !overview ? (
-          <div className="admin-loading">
+          <div className="admin-loading" role="status" aria-live="polite">
             <LoaderCircle className="spin" size={27} />
             <strong>正在读取后台数据</strong>
           </div>
@@ -155,6 +211,7 @@ export default function AdminApp(props: {
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
                     placeholder="搜索用户邮箱"
+                    aria-label="搜索用户邮箱"
                   />
                 </label>
               </div>
@@ -198,7 +255,11 @@ export default function AdminApp(props: {
                       className="admin-delete-button"
                       disabled={user.id === overview?.currentAdminId}
                       title={user.id === overview?.currentAdminId ? "不能删除当前管理员" : "删除用户"}
-                      onClick={() => setTarget(user)}
+                      aria-label={user.id === overview?.currentAdminId ? "不能删除当前管理员" : `删除用户 ${user.email}`}
+                      onClick={(event) => {
+                        dialogReturnFocusRef.current = event.currentTarget;
+                        setTarget(user);
+                      }}
                     >
                       <Trash2 size={16} />
                     </button>
@@ -223,7 +284,12 @@ export default function AdminApp(props: {
           transition={quickTransition}
         >
           <motion.section
+            ref={dialogRef}
             className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={dialogTitleId}
+            tabIndex={-1}
             onMouseDown={(event) => event.stopPropagation()}
             variants={popoverVariants}
             initial="hidden"
@@ -231,7 +297,7 @@ export default function AdminApp(props: {
             exit="exit"
             transition={panelTransition}
           >
-            <header><h2>删除用户？</h2><button disabled={deleting} onClick={() => setTarget(null)}><X size={18} /></button></header>
+            <header><h2 id={dialogTitleId}>删除用户？</h2><button disabled={deleting} aria-label="关闭" onClick={() => setTarget(null)}><X size={18} /></button></header>
             <div className="confirm-copy">
               <span className="danger-icon"><Trash2 size={21} /></span>
               <p>

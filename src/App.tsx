@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -281,11 +282,12 @@ export default function App() {
     content = <PublicShareView token={publicShareToken} />;
   } else if (!ready) {
     content = (
-      <div className="app-loading">
+      <div className="app-loading" role="status" aria-live="polite">
         <div className="brand-mark">
           <Cloud size={25} strokeWidth={2.3} />
         </div>
         <LoaderCircle className="spin" size={22} />
+        <span className="app-loading-copy">正在安全加载小盘…</span>
       </div>
     );
   } else {
@@ -333,9 +335,10 @@ function AuthenticatedView({ session }: { session: Session }) {
 
   if (checking) {
     return (
-      <div className="app-loading">
+      <div className="app-loading" role="status" aria-live="polite">
         <div className="brand-mark"><Cloud size={25} /></div>
         <LoaderCircle className="spin" size={22} />
+        <span className="app-loading-copy">正在检查账户权限…</span>
       </div>
     );
   }
@@ -642,25 +645,25 @@ function AuthView() {
           </header>
 
           {!isSupabaseConfigured && (
-            <div className="inline-alert warning">
+            <div className="inline-alert warning" role="status">
               <CircleAlert size={17} />
               当前为界面预览。连接 Supabase 后即可注册登录。
             </div>
           )}
           {error && (
-            <div className="inline-alert error">
+            <div className="inline-alert error" role="alert" aria-live="assertive">
               <CircleAlert size={17} />
               {error}
             </div>
           )}
           {notice && (
-            <div className="inline-alert success">
+            <div className="inline-alert success" role="status" aria-live="polite">
               <Check size={17} />
               {notice}
             </div>
           )}
 
-          <form onSubmit={submit} className="auth-form">
+          <form onSubmit={submit} className="auth-form" aria-busy={busy}>
             {mode === "signup" && signupStep === "details" && (
               <label>
                 <span>你的称呼</span>
@@ -738,7 +741,7 @@ function AuthView() {
                     onToken={setCaptchaToken}
                   />
                 ) : (
-                  <p className="captcha-unconfigured">
+                  <p className="captcha-unconfigured" role="alert">
                     尚未配置 Turnstile 站点密钥，暂时无法继续。
                   </p>
                 )}
@@ -880,6 +883,7 @@ function DriveApp({
   );
   const [uploadPanelOpen, setUploadPanelOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const uploads = useRef(new Map<string, ResumableUpload>());
   const cancelledTaskIds = useRef(new Set<string>());
@@ -905,6 +909,7 @@ function DriveApp({
 
   const refresh = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const [nextItems, nextUsage, nextQuota] = await Promise.all([
         listDriveItems({
@@ -921,7 +926,9 @@ function DriveApp({
       setQuota(nextQuota);
       setSelected(new Set());
     } catch (loadError) {
-      setToast(messageFrom(loadError));
+      const message = messageFrom(loadError);
+      setLoadError(message);
+      setToast(message);
     } finally {
       setLoading(false);
     }
@@ -1340,12 +1347,14 @@ function DriveApp({
   }
 
   async function download(item: DriveItem) {
+    setToast(`正在为“${item.name}”生成安全下载链接…`);
     try {
       const url = await signedDownloadUrl(item, session.access_token);
       const usesCoarsePointer =
         window.matchMedia?.("(pointer: coarse)").matches ||
         window.navigator.maxTouchPoints > 0;
       if (usesCoarsePointer) {
+        setToast(`“${item.name}”已开始下载`);
         window.location.assign(url);
         return;
       }
@@ -1356,6 +1365,7 @@ function DriveApp({
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
+      setToast(`“${item.name}”已开始下载`);
     } catch (downloadError) {
       setToast(messageFrom(downloadError));
     }
@@ -1747,6 +1757,7 @@ function DriveApp({
             <button
               key={item.id}
               className={category === item.id ? "active" : ""}
+              aria-current={category === item.id ? "page" : undefined}
               onClick={() => chooseCategory(item.id)}
             >
               {item.icon}
@@ -1786,7 +1797,15 @@ function DriveApp({
             </span>
             <strong>{usagePercent.toFixed(0)}%</strong>
           </div>
-          <div className="storage-track">
+          <div
+            className="storage-track"
+            role="progressbar"
+            aria-label="存储空间使用情况"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(usagePercent)}
+            aria-valuetext={`已用 ${formatBytes(usage.used_bytes)}，总计 ${formatQuotaBytes(accountQuotaBytes)}`}
+          >
             <span style={{ width: `${usagePercent}%` }} />
           </div>
           <p>
@@ -1853,6 +1872,7 @@ function DriveApp({
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="搜索你的文件"
+              aria-label="搜索文件"
             />
             {search && (
               <button
@@ -2061,6 +2081,9 @@ function DriveApp({
             <div className="toolbar-right">
               <button
                 className="sort-button"
+                type="button"
+                aria-label={sortDirection === "asc" ? "切换为降序" : "切换为升序"}
+                title={sortDirection === "asc" ? "当前升序，点击切换为降序" : "当前降序，点击切换为升序"}
                 onClick={() =>
                   setSortDirection((value) => (value === "asc" ? "desc" : "asc"))
                 }
@@ -2074,6 +2097,7 @@ function DriveApp({
               <label className="sort-select">
                 <select
                   value={sortKey}
+                  aria-label="排序依据"
                   onChange={(event) => setSortKey(event.target.value as SortKey)}
                 >
                   <option value="name">按名称</option>
@@ -2087,6 +2111,7 @@ function DriveApp({
                   className={viewMode === "list" ? "active" : ""}
                   onClick={() => setViewMode("list")}
                   aria-label="列表视图"
+                  aria-pressed={viewMode === "list"}
                 >
                   <List size={17} />
                 </button>
@@ -2094,6 +2119,7 @@ function DriveApp({
                   className={viewMode === "grid" ? "active" : ""}
                   onClick={() => setViewMode("grid")}
                   aria-label="网格视图"
+                  aria-pressed={viewMode === "grid"}
                 >
                   <Grid2X2 size={17} />
                 </button>
@@ -2112,6 +2138,26 @@ function DriveApp({
             }}
           />
 
+          <AnimatePresence initial={false}>
+            {loadError && !loading && (
+              <motion.div
+                className="file-load-alert"
+                role="alert"
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={quickTransition}
+              >
+                <CircleAlert size={17} />
+                <span>{loadError}</span>
+                <button type="button" onClick={() => void refresh()}>
+                  <RefreshCw size={15} />
+                  重试
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={`${currentFolder?.id ?? "root"}:${category}:${query}:${viewMode}`}
@@ -2121,13 +2167,10 @@ function DriveApp({
             animate="visible"
             exit="exit"
             transition={panelTransition}
+            aria-busy={loading}
           >
             {loading ? (
-              <div className="empty-state">
-                <LoaderCircle className="spin" size={28} />
-                <strong>正在加载</strong>
-                <span>很快就好</span>
-              </div>
+              <FileAreaSkeleton viewMode={viewMode} />
             ) : visibleItems.length === 0 ? (
               <div className="empty-state">
                 <span className="empty-illustration">
@@ -2153,6 +2196,7 @@ function DriveApp({
                   <label>
                     <input
                       type="checkbox"
+                      aria-label="选择当前显示的全部内容"
                       checked={
                         visibleItems.length > 0 &&
                         selected.size === visibleItems.length
@@ -2224,6 +2268,9 @@ function DriveApp({
                     ]
                       .filter(Boolean)
                       .join(" ")}
+                    tabIndex={0}
+                    role="group"
+                    aria-label={`${item.kind === "folder" ? "文件夹" : "文件"}：${item.name}${selected.has(item.id) ? "，已选择" : ""}`}
                     draggable
                     data-drop-folder-id={
                       item.kind === "folder" ? item.id : undefined
@@ -2251,6 +2298,17 @@ function DriveApp({
                     onPointerCancel={cancelTouchDrag}
                     onContextMenu={(event) => {
                       if (touchDragSession.current?.active) event.preventDefault();
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.target !== event.currentTarget) return;
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        if (item.kind === "folder") openFolder(item);
+                        else void download(item);
+                      } else if (event.key === " ") {
+                        event.preventDefault();
+                        toggleSelection(item.id);
+                      }
                     }}
                     onClick={(event) => {
                       if (
@@ -2305,7 +2363,7 @@ function DriveApp({
                     <div className="card-actions">
                       {item.kind === "file" && (
                         <>
-                          <button title="分享" onClick={() => onOpenShares(item)}>
+                          <button title="分享" aria-label={`分享 ${item.name}`} onClick={() => onOpenShares(item)}>
                             <Share2 size={15} />
                           </button>
                           <button
@@ -2318,7 +2376,11 @@ function DriveApp({
                           </button>
                         </>
                       )}
-                      <button onClick={() => setModal({ type: "rename", item })}>
+                      <button
+                        aria-label={`重命名 ${item.name}`}
+                        title="重命名"
+                        onClick={() => setModal({ type: "rename", item })}
+                      >
                         <MoreHorizontal size={16} />
                       </button>
                     </div>
@@ -2482,6 +2544,9 @@ function DriveApp({
       {toast && (
         <motion.div
           className="toast"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
           initial={{ opacity: 0, x: "-50%", y: 8, scale: 0.985 }}
           animate={{ opacity: 1, x: "-50%", y: 0, scale: 1 }}
           exit={{ opacity: 0, x: "-50%", y: 5, scale: 0.99 }}
@@ -2489,12 +2554,32 @@ function DriveApp({
         >
           <CircleAlert size={17} />
           <span>{toast}</span>
-          <button onClick={() => setToast(null)}>
+          <button onClick={() => setToast(null)} aria-label="关闭提示">
             <X size={15} />
           </button>
         </motion.div>
       )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+function FileAreaSkeleton({ viewMode }: { viewMode: ViewMode }) {
+  const placeholders = Array.from({ length: viewMode === "list" ? 7 : 8 });
+
+  return (
+    <div className={`file-skeleton ${viewMode}`} role="status" aria-live="polite">
+      <span className="sr-only">正在加载文件列表…</span>
+      <div className="file-skeleton-content" aria-hidden="true">
+        {placeholders.map((_, index) => (
+          <div className="file-skeleton-item" key={index}>
+            <span className="skeleton-icon" />
+            <span className="skeleton-line primary" />
+            <span className="skeleton-line secondary" />
+            {viewMode === "list" && <span className="skeleton-line tertiary" />}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -2532,6 +2617,9 @@ function FileRow(props: {
       ]
         .filter(Boolean)
         .join(" ")}
+      tabIndex={0}
+      role="group"
+      aria-label={`${props.item.kind === "folder" ? "文件夹" : "文件"}：${props.item.name}${props.checked ? "，已选择" : ""}`}
       draggable
       data-drop-folder-id={
         props.item.kind === "folder" ? props.item.id : undefined
@@ -2548,6 +2636,16 @@ function FileRow(props: {
       onContextMenu={(event) => {
         if (props.dragging) event.preventDefault();
       }}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter") {
+          event.preventDefault();
+          props.onOpen();
+        } else if (event.key === " ") {
+          event.preventDefault();
+          props.onToggle();
+        }
+      }}
       layout="position"
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
@@ -2555,7 +2653,12 @@ function FileRow(props: {
       transition={quickTransition}
     >
       <label>
-        <input type="checkbox" checked={props.checked} onChange={props.onToggle} />
+        <input
+          type="checkbox"
+          checked={props.checked}
+          onChange={props.onToggle}
+          aria-label={`选择 ${props.item.name}`}
+        />
       </label>
       <button
         className="file-name"
@@ -2585,7 +2688,7 @@ function FileRow(props: {
       <div className="row-actions">
         {props.item.kind === "file" && (
           <>
-            <button title="分享" onClick={props.onShare}>
+            <button title="分享" aria-label={`分享 ${props.item.name}`} onClick={props.onShare}>
               <Share2 size={16} />
             </button>
             <button
@@ -2599,7 +2702,7 @@ function FileRow(props: {
           </>
         )}
         <div className="menu-wrap">
-          <button title="更多操作">
+          <button title="更多操作" aria-label={`打开 ${props.item.name} 的更多操作`}>
             <MoreHorizontal size={17} />
           </button>
           <div className="context-menu">
@@ -2651,6 +2754,7 @@ function UploadCenter(props: {
   return (
     <motion.aside
       className={`upload-center ${props.open ? "open" : ""}`}
+      aria-label="上传任务"
       variants={popoverVariants}
       initial="hidden"
       animate="visible"
@@ -2658,16 +2762,25 @@ function UploadCenter(props: {
       transition={panelTransition}
       layout
     >
-      <button className="upload-center-head" onClick={props.onToggle}>
+      <button
+        className="upload-center-head"
+        onClick={props.onToggle}
+        aria-expanded={props.open}
+        aria-controls="upload-task-list"
+      >
         <span>
           <UploadCloud size={18} />
           <strong>{active ? `正在上传 ${active} 项` : "上传任务"}</strong>
+          <span className="sr-only" aria-live="polite">
+            {active ? `${active} 个上传任务正在进行` : "没有正在进行的上传任务"}
+          </span>
         </span>
         <ChevronDown size={17} />
       </button>
       <AnimatePresence initial={false}>
       {props.open && (
         <motion.div
+          id="upload-task-list"
           className="upload-list"
           initial={{ opacity: 0, height: 0 }}
           animate={{ opacity: 1, height: "auto" }}
@@ -2717,23 +2830,43 @@ function UploadCenter(props: {
                       {formatBytes(task.uploaded)} / {formatBytes(task.total)}
                     </span>
                   </div>
-                  <div className={`task-track ${task.status}`}>
+                  <div
+                    className={`task-track ${task.status}`}
+                    role="progressbar"
+                    aria-label={`${task.displayName} 上传进度`}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(progress)}
+                    aria-valuetext={`${progress.toFixed(0)}%，${formatBytes(task.uploaded)} / ${formatBytes(task.total)}`}
+                  >
                     <span style={{ width: `${progress}%` }} />
                   </div>
                 </div>
                 <div className="task-action">
                   {task.status === "uploading" && (
-                    <button onClick={() => props.onPause(task.id)} title="暂停">
+                    <button
+                      onClick={() => props.onPause(task.id)}
+                      title="暂停"
+                      aria-label={`暂停上传 ${task.displayName}`}
+                    >
                       <Pause size={15} />
                     </button>
                   )}
                   {task.status === "paused" && (
-                    <button onClick={() => props.onResume(task.id)} title="继续">
+                    <button
+                      onClick={() => props.onResume(task.id)}
+                      title="继续"
+                      aria-label={`继续上传 ${task.displayName}`}
+                    >
                       <Play size={15} />
                     </button>
                   )}
                   {task.status === "error" && (
-                    <button onClick={() => props.onResume(task.id)} title="重试">
+                    <button
+                      onClick={() => props.onResume(task.id)}
+                      title="重试"
+                      aria-label={`重试上传 ${task.displayName}`}
+                    >
                       <RotateCcw size={15} />
                     </button>
                   )}
@@ -2777,6 +2910,73 @@ function ModalFrame(props: {
   children: ReactNode;
   onClose: () => void;
 }) {
+  const titleId = useId();
+  const dialogRef = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(props.onClose);
+  const previousFocusRef = useRef<HTMLElement | null>(
+    document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  );
+  onCloseRef.current = props.onClose;
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const focusableSelector = [
+      "button:not([disabled])",
+      "input:not([disabled])",
+      "select:not([disabled])",
+      "textarea:not([disabled])",
+      "a[href]",
+      "[tabindex]:not([tabindex='-1'])",
+    ].join(",");
+    const focusableElements = () =>
+      Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector)).filter(
+        (element) => element.getClientRects().length > 0,
+      );
+    const focusFrame = window.requestAnimationFrame(() => {
+      if (dialog.contains(document.activeElement)) return;
+      (focusableElements()[0] ?? dialog).focus({ preventScroll: true });
+    });
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const elements = focusableElements();
+      if (elements.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (!dialog.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+        return;
+      }
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", handleKeyDown);
+      const previousFocus = previousFocusRef.current;
+      if (previousFocus && document.contains(previousFocus)) {
+        previousFocus.focus({ preventScroll: true });
+      }
+    };
+  }, []);
+
   return (
     <motion.div
       className="modal-backdrop"
@@ -2787,7 +2987,12 @@ function ModalFrame(props: {
       transition={quickTransition}
     >
       <motion.section
+        ref={dialogRef}
         className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
         variants={popoverVariants}
         initial="hidden"
@@ -2796,7 +3001,7 @@ function ModalFrame(props: {
         transition={panelTransition}
       >
         <header>
-          <h2>{props.title}</h2>
+          <h2 id={titleId}>{props.title}</h2>
           <button onClick={props.onClose} aria-label="关闭">
             <X size={18} />
           </button>
@@ -2843,7 +3048,7 @@ function TextModal(props: {
             required
           />
         </label>
-        {error && <p className="modal-error">{error}</p>}
+        {error && <p className="modal-error" role="alert">{error}</p>}
         <div className="modal-actions">
           <button type="button" className="secondary-button" onClick={props.onClose}>
             取消
@@ -2893,7 +3098,7 @@ function MoveModal(props: {
             </button>
           ))}
       </div>
-      {error && <p className="modal-error">{error}</p>}
+      {error && <p className="modal-error" role="alert">{error}</p>}
       <div className="modal-actions">
         <button className="secondary-button" onClick={props.onClose}>
           取消
@@ -2935,7 +3140,7 @@ function ConfirmModal(props: {
         </span>
         <p>{props.description}</p>
       </div>
-      {error && <p className="modal-error">{error}</p>}
+      {error && <p className="modal-error" role="alert">{error}</p>}
       <div className="modal-actions">
         <button className="secondary-button" onClick={props.onClose}>
           取消

@@ -154,7 +154,7 @@ export default function ShareCenter(props: {
         <div className="share-center-account">
           <span className="avatar compact">{initials(props.session.user.email)}</span>
           <span>{props.session.user.email}</span>
-          <button className="icon-button" title="退出登录" onClick={() => void supabase.auth.signOut()}>
+          <button className="icon-button" title="退出登录" aria-label="退出登录" onClick={() => void supabase.auth.signOut()}>
             <LogOut size={17} />
           </button>
         </div>
@@ -201,7 +201,7 @@ export default function ShareCenter(props: {
               ))}
             </div>
 
-            <form className="share-create-form" onSubmit={submit}>
+            <form className="share-create-form" onSubmit={submit} aria-busy={creating}>
               <label>
                 <span>分享标题</span>
                 <input
@@ -275,9 +275,9 @@ export default function ShareCenter(props: {
                 </select>
               </label>
 
-              {error && <div className="share-inline-message error">{error}</div>}
+              {error && <div className="share-inline-message error" role="alert" aria-live="assertive">{error}</div>}
               {notice && (
-                <div className="share-inline-message success">
+                <div className="share-inline-message success" role="status" aria-live="polite">
                   <Check size={16} />
                   <span>{notice}</span>
                 </div>
@@ -304,13 +304,13 @@ export default function ShareCenter(props: {
                 <h2>我的分享</h2>
                 <p>{shares.length} 条分享，可复制、预览或取消。</p>
               </div>
-              <button className="icon-button" onClick={() => void load()} disabled={loading} title="刷新">
+              <button className="icon-button" onClick={() => void load()} disabled={loading} title="刷新" aria-label="刷新分享记录">
                 <RefreshCw className={loading ? "spin" : ""} size={17} />
               </button>
             </div>
 
             {loading && shares.length === 0 ? (
-              <div className="share-list-empty">
+              <div className="share-list-empty" role="status" aria-live="polite">
                 <LoaderCircle className="spin" size={24} />
                 <span>正在加载分享</span>
               </div>
@@ -365,15 +365,16 @@ export default function ShareCenter(props: {
                         </div>
                       </div>
                       <div className="share-list-actions">
-                        <button title="复制链接" onClick={() => void copyText(url)}>
+                        <button title="复制链接" aria-label={`复制“${share.title}”的分享链接`} onClick={() => void copyText(url)}>
                           <Copy size={16} />
                         </button>
-                        <button title="打开分享" onClick={() => window.open(url, "_blank", "noopener,noreferrer")}>
+                        <button title="打开分享" aria-label={`打开“${share.title}”的分享`} onClick={() => window.open(url, "_blank", "noopener,noreferrer")}>
                           <ExternalLink size={16} />
                         </button>
                         <button
                           className="danger-text"
                           title="取消分享"
+                          aria-label={`取消“${share.title}”的分享`}
                           disabled={deletingId === share.id}
                           onClick={() => {
                             if (!window.confirm(`确定取消“${share.title}”的分享吗？`)) return;

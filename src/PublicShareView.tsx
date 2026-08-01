@@ -54,14 +54,14 @@ export default function PublicShareView({ token }: { token: string }) {
 
       <section className="public-share-stage">
         {error ? (
-          <div className="public-share-error">
+          <div className="public-share-error" role="alert" aria-live="assertive">
             <span><CircleAlert size={24} /></span>
             <h1>无法打开分享</h1>
             <p>{error}</p>
             <a className="secondary-button" href="/">返回小盘</a>
           </div>
         ) : !share ? (
-          <div className="public-share-loading">
+          <div className="public-share-loading" role="status" aria-live="polite">
             <LoaderCircle className="spin" size={27} />
             <strong>正在安全读取分享</strong>
           </div>
@@ -104,6 +104,7 @@ export default function PublicShareView({ token }: { token: string }) {
               {share.type === "text" && (
                 <button
                   className="primary-button"
+                  aria-live="polite"
                   onClick={() => {
                     void navigator.clipboard.writeText(share.textContent || "").then(() => {
                       setCopied(true);
@@ -124,6 +125,7 @@ export default function PublicShareView({ token }: { token: string }) {
                 <button
                   className="primary-button"
                   disabled={downloading}
+                  aria-busy={downloading}
                   onClick={() => {
                     setDownloading(true);
                     void getPublicFileDownload(token)
